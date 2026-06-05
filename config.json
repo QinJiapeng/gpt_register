@@ -1,17 +1,18 @@
 {
-  "heroSmsApiKey": "xxxx",
+  "heroSmsApiKey": "6290421be72dbec798d086d88Aebf4ff",
   "heroSmsService": "dr",
   "heroSmsCountry": 16,
-  "mailBaseUrl": "xxx",
-  "mailAdminPassword": "xxx",
+  "mailProvider": "cloudflare-worker",
+  "mailBaseUrl": "https://gptfree.550717.xyz",
+  "mailAdminToken": "123@Huya",
+  "mailAdminPassword": "",
   "mailSitePassword": "",
-  "mailDomain": "xxx",
+  "mailDomain": "550717.xyz",
   "mailDomains": [
-    "xxx",
-    "xxx"
+    "550717.xyz"
   ],
-  "proxyHost": "",
-  "proxyPort": 0,
+  "proxyHost": "127.0.0.1",
+  "proxyPort": 7890,
   "proxyUsername": "",
   "proxyPassword": "",
   "tokenOutputDir": "tokens",
@@ -19,5 +20,8 @@
     "tokens"
   ],
   "useChrome": true,
-  "chromePath": "/usr/bin/google-chrome-stable"
+  "chromePath": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "browserUserDataDir": "browser-profile",
+  "browserIncognito": false,
+  "browserClearChatGptSession": true
 }

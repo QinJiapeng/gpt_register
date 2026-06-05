@@ -1,1 +1,28 @@
-[]
+[
+  {
+    "phone": "+447886551560",
+    "password": "fpYU3Y$9PqRBPOBRA1!",
+    "name": "Kali Thomson",
+    "birthDate": "1990-04-22",
+    "phoneCountryCode": "GB",
+    "phoneCountryDialCode": "44",
+    "phoneCountryName": "英国",
+    "heroSmsCountry": 16,
+    "smsOperator": "",
+    "createdAt": "2026-06-05T13:33:50.674Z",
+    "status": "email_bound"
+  },
+  {
+    "phone": "+447403273479",
+    "password": "vG76kkb1JSNcKH97A1!",
+    "name": "Lyudmila Agathanjiross",
+    "birthDate": "1987-07-19",
+    "phoneCountryCode": "GB",
+    "phoneCountryDialCode": "44",
+    "phoneCountryName": "英国",
+    "heroSmsCountry": 16,
+    "smsOperator": "",
+    "createdAt": "2026-06-05T13:45:12.242Z",
+    "status": "oauth_done"
+  }
+]
