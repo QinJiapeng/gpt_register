@@ -1,0 +1,17 @@
+{
+  "baseUrl": "https://your-server.example.com",
+  "token": "YOUR_AGENT_API_TOKEN",
+  "workerId": "local-pc-1",
+  "pollIntervalMs": 10000,
+  "requestTimeoutMs": 30000,
+  "nextJobPath": "/api/agent/jobs/next",
+  "statusPathTemplate": "/api/agent/jobs/{id}/status",
+  "authFileUploadUrl": "http://170.106.140.71:8317/v0/management/auth-files",
+  "authFileUploadToken": "YOUR_AUTH_FILE_UPLOAD_TOKEN",
+  "authFileUploadField": "file",
+  "authFileUploadDirs": [
+    "tokens"
+  ],
+  "authFileUploadMaxFiles": 100,
+  "authFileUploadMaxBytes": 2097152
+}

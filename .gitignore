@@ -1,0 +1,13 @@
+node_modules/
+.wrangler/
+.dev.vars
+dist/
+.DS_Store
+config.agent.json
+agent.lock
+logs/
+tokens/
+tokens_old/
+pixel/
+browser-profile/
+.idea/
