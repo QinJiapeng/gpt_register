@@ -23,6 +23,7 @@ const DEFAULT_CONFIG = {
     authFileUploadDirs: ['tokens'],
     authFileUploadMaxFiles: 100,
     authFileUploadMaxBytes: 2 * 1024 * 1024,
+    authFileArchiveDir: 'tokens_old',
 };
 
 function readJsonIfExists(filePath) {
@@ -49,6 +50,7 @@ function loadAgentConfig() {
     config.authFileUploadUrl = process.env.AUTH_FILE_UPLOAD_URL || config.authFileUploadUrl;
     config.authFileUploadToken = process.env.AUTH_FILE_UPLOAD_TOKEN || config.authFileUploadToken;
     config.authFileUploadField = process.env.AUTH_FILE_UPLOAD_FIELD || config.authFileUploadField || DEFAULT_CONFIG.authFileUploadField;
+    config.authFileArchiveDir = process.env.AUTH_FILE_ARCHIVE_DIR || config.authFileArchiveDir || DEFAULT_CONFIG.authFileArchiveDir;
 
     if (!config.baseUrl) {
         throw new Error('缺少远程任务地址。请设置 config.agent.json 的 baseUrl，或设置 AGENT_BASE_URL。');
@@ -362,6 +364,27 @@ function collectChangedUploadFiles(config, beforeSnapshot) {
     return changed;
 }
 
+function archiveUploadedAuthFile(config, filePath) {
+    const archiveRoot = resolveInsideRoot(config.authFileArchiveDir);
+    if (!archiveRoot) {
+        throw new Error(`归档目录不在工作区内: ${config.authFileArchiveDir}`);
+    }
+
+    const relativePath = path.relative(ROOT_DIR, filePath);
+    const segments = relativePath.split(path.sep);
+    if (segments[0] === 'tokens') segments.shift();
+
+    const targetPath = path.resolve(archiveRoot, ...segments);
+    const targetRelative = path.relative(ROOT_DIR, targetPath);
+    if (targetRelative.startsWith('..') || path.isAbsolute(targetRelative)) {
+        throw new Error(`归档目标不在工作区内: ${targetPath}`);
+    }
+
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+    fs.copyFileSync(filePath, targetPath);
+    return targetPath;
+}
+
 async function uploadAuthFiles(config, job, filePaths) {
     if (!config.authFileUploadUrl || filePaths.length === 0) return { uploaded: 0, failed: [] };
 
@@ -395,8 +418,10 @@ async function uploadAuthFiles(config, job, filePaths) {
                 throw new Error(`HTTP ${response.status} ${body.slice(0, 300)}`);
             }
 
+            const archivedPath = archiveUploadedAuthFile(config, filePath);
             uploaded.push(relativePath);
             console.log(`[Agent] 已上传认证文件: ${relativePath}`);
+            console.log(`[Agent] 已复制到归档目录: ${path.relative(ROOT_DIR, archivedPath).replace(/\\/g, '/')}`);
         } catch (error) {
             failed.push({ path: relativePath, error: error.message });
             console.warn(`[Agent] 上传认证文件失败: ${relativePath} -> ${error.message}`);

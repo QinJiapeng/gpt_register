@@ -13,5 +13,6 @@
     "tokens"
   ],
   "authFileUploadMaxFiles": 100,
-  "authFileUploadMaxBytes": 2097152
+  "authFileUploadMaxBytes": 2097152,
+  "authFileArchiveDir": "tokens_old"
 }
