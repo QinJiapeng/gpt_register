@@ -169,6 +169,152 @@ node index.js --phase3
 node index.js --phase8
 ```
 
+## Remote Agent
+
+本项目支持在本地常驻一个 Agent，由 Agent 主动向远程服务器拉取任务，然后在本机执行现有脚本并回传运行状态。这样不需要把本地电脑暴露到公网，也避免远程命令直接执行 shell。
+
+复制 Agent 配置：
+
+```bash
+cp config.agent.example.json config.agent.json
+```
+
+编辑 `config.agent.json`：
+
+```json
+{
+  "baseUrl": "https://your-server.example.com",
+  "token": "YOUR_AGENT_API_TOKEN",
+  "workerId": "local-pc-1",
+  "pollIntervalMs": 10000,
+  "authFileUploadUrl": "http://170.106.140.71:8317/v0/management/auth-files",
+  "authFileUploadToken": "YOUR_AUTH_FILE_UPLOAD_TOKEN"
+}
+```
+
+启动本地 Agent：
+
+```bash
+npm run agent
+```
+
+也可以用环境变量覆盖：
+
+```bash
+AGENT_BASE_URL=https://your-server.example.com AGENT_TOKEN=xxx npm run agent
+```
+
+Agent 默认调用这些接口：
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `GET` | `/api/agent/jobs/next` | 拉取下一条任务 |
+| `POST` | `/api/agent/jobs/{id}/status` | 上报 `running`、`success`、`failed` |
+
+所有请求会带上：
+
+```http
+Authorization: Bearer YOUR_AGENT_API_TOKEN
+```
+
+### 任务格式
+
+推荐服务端返回结构化任务：
+
+```json
+{
+  "id": "job_001",
+  "command": "run",
+  "mode": "full",
+  "count": 5,
+  "country": "SE",
+  "configProfile": "server"
+}
+```
+
+等价于本地执行：
+
+```bash
+CONFIG_PROFILE=server node index.js 5 --country=SE
+```
+
+支持的 `mode`：
+
+| mode | 本地命令 |
+| --- | --- |
+| `full` | `node index.js <count>` |
+| `stop-after-phase2` | `node index.js <count> --stop-after-phase2` |
+| `phase2` | `node index.js --phase2` |
+| `phase3` | `node index.js --phase3` |
+| `phase8` | `node index.js --phase8` |
+| `test-sms-country` | `node index.js --test-sms-country` |
+
+也兼容直接返回白名单参数：
+
+```json
+{
+  "id": "job_002",
+  "command": "run",
+  "args": ["3", "--country=GB"]
+}
+```
+
+Agent 只允许这些参数：
+
+```text
+<1-100>
+--country=XX
+--phase2
+--phase3
+--phase8
+--stop-after-phase2
+--test-sms-country
+```
+
+### 认证文件上传
+
+如果配置了 `authFileUploadUrl`，Agent 会在任务执行完成后上传本次新增或修改的 `tokens/*.json` 文件。
+
+```json
+{
+  "authFileUploadUrl": "http://170.106.140.71:8317/v0/management/auth-files",
+  "authFileUploadToken": "YOUR_AUTH_FILE_UPLOAD_TOKEN",
+  "authFileUploadField": "file",
+  "authFileUploadDirs": ["tokens"],
+  "authFileArchiveDir": "tokens_old"
+}
+```
+
+上传成功后，Agent 会把对应文件复制到 `tokens_old/`。上传失败的文件不会复制。
+
+上传方式是 `multipart/form-data`，默认文件字段名是 `file`，请求头为：
+
+```http
+Authorization: Bearer YOUR_AUTH_FILE_UPLOAD_TOKEN
+```
+
+同时会带上普通表单字段：
+
+```text
+jobId
+workerId
+path
+```
+
+### 状态回报
+
+`/status` 会收到类似：
+
+```json
+{
+  "workerId": "local-pc-1",
+  "status": "success",
+  "exitCode": 0,
+  "stdoutTail": "...",
+  "stderrTail": "..."
+}
+```
+
 ## Workflow
 
 默认完整流程分为四段：

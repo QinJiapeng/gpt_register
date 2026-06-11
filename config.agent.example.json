@@ -14,5 +14,18 @@
   ],
   "authFileUploadMaxFiles": 100,
   "authFileUploadMaxBytes": 2097152,
-  "authFileArchiveDir": "tokens_old"
+  "authFileArchiveDir": "tokens_old",
+  "authFileUploadTargets": {
+    "sub2api": {
+      "authFileUploadUrl": "",
+      "authFileUploadToken": "",
+      "authFileUploadField": "file",
+      "authFileUploadDirs": [
+        "tokens_sub2api"
+      ],
+      "tokenOutputDirs": [
+        "tokens_sub2api"
+      ]
+    }
+  }
 }
