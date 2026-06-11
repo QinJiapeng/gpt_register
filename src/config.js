@@ -86,6 +86,13 @@ function resolveProjectPath(value = '') {
     return path.isAbsolute(raw) ? raw : path.resolve(rootDir, raw);
 }
 
+function parsePathList(value = '') {
+    return String(value || '')
+        .split(/[;,]/)
+        .map(item => item.trim())
+        .filter(Boolean);
+}
+
 // 读取配置文件：基础 config.json + 环境覆盖文件
 function loadConfig() {
     const baseConfig = readJsonConfig(configPath);
@@ -107,6 +114,8 @@ function loadConfig() {
 }
 
 const config = loadConfig();
+const envTokenOutputDirs = parsePathList(process.env.TOKEN_OUTPUT_DIRS);
+const envTokenOutputDir = String(process.env.TOKEN_OUTPUT_DIR || '').trim();
 const envProxy = parseProxyUrl(
     process.env.HTTPS_PROXY
     || process.env.HTTP_PROXY
@@ -150,10 +159,12 @@ module.exports = {
     // OAuth
     oauthClientId: config.oauthClientId || 'app_EMoamEEZ73f0CkXaXp7hrann',
     oauthRedirectPort: parseInt(config.oauthRedirectPort, 10) || 1455,
-    tokenOutputDir: config.tokenOutputDir || '',
-    tokenOutputDirs: Array.isArray(config.tokenOutputDirs)
-        ? config.tokenOutputDirs.filter(Boolean)
-        : [],
+    tokenOutputDir: envTokenOutputDir || config.tokenOutputDir || '',
+    tokenOutputDirs: envTokenOutputDirs.length > 0
+        ? envTokenOutputDirs
+        : (Array.isArray(config.tokenOutputDirs)
+            ? config.tokenOutputDirs.filter(Boolean)
+            : []),
 
     // 浏览器
     useChrome: config.useChrome !== false,

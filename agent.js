@@ -24,6 +24,14 @@ const DEFAULT_CONFIG = {
     authFileUploadMaxFiles: 100,
     authFileUploadMaxBytes: 2 * 1024 * 1024,
     authFileArchiveDir: 'tokens_old',
+    authFileUploadTargets: {
+        sub2api: {
+            authFileUploadUrl: '',
+            authFileUploadToken: '',
+            authFileUploadDirs: ['tokens_sub2api'],
+            tokenOutputDirs: ['tokens_sub2api'],
+        },
+    },
 };
 
 function readJsonIfExists(filePath) {
@@ -171,8 +179,15 @@ function normalizeJob(job) {
         id: String(id),
         args,
         env,
+        uploadTarget: normalizeUploadTarget(job.uploadTarget),
         raw: job,
     };
+}
+
+function normalizeUploadTarget(value) {
+    const target = String(value || 'cpa').trim().toLowerCase();
+    if (['cpa', 'sub2api'].includes(target)) return target;
+    throw new Error(`不支持的上传类型: ${value}`);
 }
 
 function sanitizeRawArgs(args) {
@@ -364,6 +379,16 @@ function collectChangedUploadFiles(config, beforeSnapshot) {
     return changed;
 }
 
+function resolveJobConfig(config, job) {
+    const target = job.uploadTarget || 'cpa';
+    const targetConfig = config.authFileUploadTargets?.[target] || {};
+    return {
+        ...config,
+        ...targetConfig,
+        uploadTarget: target,
+    };
+}
+
 function archiveUploadedAuthFile(config, filePath) {
     const archiveRoot = resolveInsideRoot(config.authFileArchiveDir);
     if (!archiveRoot) {
@@ -484,19 +509,31 @@ async function executeJob(client, config, job) {
     ensureNoStaleLock();
     writeLock(job.id);
 
+    const jobConfig = resolveJobConfig(config, job);
     const startedAt = new Date().toISOString();
-    const beforeUploadSnapshot = snapshotUploadFiles(config);
+    const beforeUploadSnapshot = snapshotUploadFiles(jobConfig);
     try {
         await reportStatus(client, config, job.id, 'running', {
             startedAt,
             args: job.args,
             configProfile: job.env.CONFIG_PROFILE || '',
+            uploadTarget: job.uploadTarget,
         });
 
-        const result = await runMainScript(job);
+        const runJob = {
+            ...job,
+            env: {
+                ...job.env,
+            },
+        };
+        if (Array.isArray(jobConfig.tokenOutputDirs) && jobConfig.tokenOutputDirs.length > 0) {
+            runJob.env.TOKEN_OUTPUT_DIRS = jobConfig.tokenOutputDirs.join(',');
+        }
+
+        const result = await runMainScript(runJob);
         const finishedAt = new Date().toISOString();
-        const changedFiles = collectChangedUploadFiles(config, beforeUploadSnapshot);
-        const uploadResult = await uploadAuthFiles(config, job, changedFiles);
+        const changedFiles = collectChangedUploadFiles(jobConfig, beforeUploadSnapshot);
+        const uploadResult = await uploadAuthFiles(jobConfig, job, changedFiles);
         const uploadSummary = uploadResult.uploaded || uploadResult.failed.length
             ? `\n[Agent] auth file upload: uploaded=${uploadResult.uploaded}, failed=${uploadResult.failed.length}`
             : '';
