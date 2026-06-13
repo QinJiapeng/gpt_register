@@ -1,10 +1,11 @@
 {
   "heroSmsApiKey": "YOUR_HEROSMS_API_KEY",
   "heroSmsService": "dr",
-  "heroSmsCountry": 16,
+  "heroSmsCountry": 73,
   "heroSmsPromptCountrySelection": true,
   "heroSmsCountryTopN": 10,
-  "phoneCountryCode": "GB",
+  "heroSmsMaxPrice": 0.05,
+  "phoneCountryCode": "BR",
   "phoneCountries": [
     { "isoCode": "GB", "dialCode": "44", "name": "英国" },
     { "isoCode": "US", "dialCode": "1", "name": "美国" },

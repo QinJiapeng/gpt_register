@@ -421,15 +421,14 @@ class SMSProvider {
     /**
      * 获取手机号码（V2 接口，返回 JSON）
      * @param {string} service - 服务代码（OpenAI = 'dr'）
-     * @param {number} country - 国家 ID（英国 = 16）
+     * @param {number} country - 国家 ID（巴西 = 73）
      * @returns {Promise<{activationId: number, phoneNumber: string}>}
      */
-    async getNumber(service = 'dr', country = 16, maxRetries = 5, operator = '') {
+    async getNumber(service = 'dr', country = 73, maxRetries = 5) {
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
             let data;
             try {
                 const params = { service, country };
-                if (operator) params.operator = operator;
                 data = await this.request('getNumberV2', params);
             } catch (httpErr) {
                 console.log(`[SMS] API 请求失败: ${httpErr.message}，${attempt < maxRetries ? '5秒后重试...' : '已达最大重试次数'} (${attempt}/${maxRetries})`);
@@ -451,7 +450,6 @@ class SMSProvider {
                     }
                     const noNumbersError = new Error('当前无可用号码（重试耗尽）');
                     noNumbersError.code = 'SMS_NO_NUMBERS';
-                    noNumbersError.operator = operator || '';
                     throw noNumbersError;
                 }
                 throw new Error(`获取号码失败: ${data}`);
@@ -464,8 +462,7 @@ class SMSProvider {
                 this.phoneNumber = `+${this.phoneNumber}`;
             }
 
-            const operatorText = operator ? `, operator: ${operator}` : '';
-            console.log(`[SMS] 获取号码: ${this.phoneNumber} (activation: ${this.activationId}, 费用: $${data.activationCost}${operatorText})`);
+            console.log(`[SMS] 获取号码: ${this.phoneNumber} (activation: ${this.activationId}, 费用: $${data.activationCost})`);
             return { activationId: this.activationId, phoneNumber: this.phoneNumber };
         }
     }

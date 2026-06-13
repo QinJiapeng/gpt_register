@@ -20,15 +20,11 @@ const DEFAULT_CONFIG = {
     authFileUploadUrl: '',
     authFileUploadToken: '',
     authFileUploadField: 'file',
-    authFileUploadDirs: ['tokens'],
-    authFileUploadMaxFiles: 100,
     authFileUploadMaxBytes: 2 * 1024 * 1024,
-    authFileArchiveDir: 'tokens_old',
     authFileUploadTargets: {
         sub2api: {
             authFileUploadUrl: '',
             authFileUploadToken: '',
-            authFileUploadDirs: ['tokens_sub2api'],
             tokenOutputDirs: ['tokens_sub2api'],
         },
     },
@@ -58,7 +54,6 @@ function loadAgentConfig() {
     config.authFileUploadUrl = process.env.AUTH_FILE_UPLOAD_URL || config.authFileUploadUrl;
     config.authFileUploadToken = process.env.AUTH_FILE_UPLOAD_TOKEN || config.authFileUploadToken;
     config.authFileUploadField = process.env.AUTH_FILE_UPLOAD_FIELD || config.authFileUploadField || DEFAULT_CONFIG.authFileUploadField;
-    config.authFileArchiveDir = process.env.AUTH_FILE_ARCHIVE_DIR || config.authFileArchiveDir || DEFAULT_CONFIG.authFileArchiveDir;
 
     if (!config.baseUrl) {
         throw new Error('缺少远程任务地址。请设置 config.agent.json 的 baseUrl，或设置 AGENT_BASE_URL。');
@@ -299,86 +294,6 @@ function isProcessRunning(pid) {
     }
 }
 
-function snapshotUploadFiles(config) {
-    const snapshot = new Map();
-    for (const filePath of listUploadCandidates(config)) {
-        try {
-            const stat = fs.statSync(filePath);
-            if (stat.isFile()) {
-                snapshot.set(filePath, `${stat.mtimeMs}:${stat.size}`);
-            }
-        } catch (error) {
-            // Ignore files that disappear while the script is running.
-        }
-    }
-    return snapshot;
-}
-
-function listUploadCandidates(config) {
-    const paths = [];
-    const dirs = Array.isArray(config.authFileUploadDirs)
-        ? config.authFileUploadDirs
-        : DEFAULT_CONFIG.authFileUploadDirs;
-
-    for (const dir of dirs) {
-        const absDir = resolveInsideRoot(dir);
-        if (!absDir || !fs.existsSync(absDir)) continue;
-        walkJsonFiles(absDir, paths);
-    }
-
-    return paths;
-}
-
-function walkJsonFiles(dir, out) {
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
-    for (const entry of entries) {
-        const fullPath = path.join(dir, entry.name);
-        if (entry.isDirectory()) {
-            walkJsonFiles(fullPath, out);
-        } else if (entry.isFile() && entry.name.toLowerCase().endsWith('.json')) {
-            out.push(fullPath);
-        }
-    }
-}
-
-function resolveInsideRoot(relativePath) {
-    const absPath = path.resolve(ROOT_DIR, String(relativePath || ''));
-    const relative = path.relative(ROOT_DIR, absPath);
-    if (relative.startsWith('..') || path.isAbsolute(relative)) {
-        console.warn(`[Agent] 跳过工作区外上传路径: ${relativePath}`);
-        return '';
-    }
-    return absPath;
-}
-
-function collectChangedUploadFiles(config, beforeSnapshot) {
-    const changed = [];
-    const maxFiles = Number(config.authFileUploadMaxFiles) || DEFAULT_CONFIG.authFileUploadMaxFiles;
-    const maxBytes = Number(config.authFileUploadMaxBytes) || DEFAULT_CONFIG.authFileUploadMaxBytes;
-
-    for (const filePath of listUploadCandidates(config)) {
-        if (changed.length >= maxFiles) break;
-
-        let stat;
-        try {
-            stat = fs.statSync(filePath);
-        } catch (error) {
-            continue;
-        }
-
-        const signature = `${stat.mtimeMs}:${stat.size}`;
-        if (beforeSnapshot.get(filePath) === signature) continue;
-        if (stat.size > maxBytes) {
-            console.warn(`[Agent] 跳过过大的认证文件: ${path.relative(ROOT_DIR, filePath)} (${stat.size} bytes)`);
-            continue;
-        }
-
-        changed.push(filePath);
-    }
-
-    return changed;
-}
-
 function resolveJobConfig(config, job) {
     const target = job.uploadTarget || 'cpa';
     const targetConfig = config.authFileUploadTargets?.[target] || {};
@@ -387,73 +302,6 @@ function resolveJobConfig(config, job) {
         ...targetConfig,
         uploadTarget: target,
     };
-}
-
-function archiveUploadedAuthFile(config, filePath) {
-    const archiveRoot = resolveInsideRoot(config.authFileArchiveDir);
-    if (!archiveRoot) {
-        throw new Error(`归档目录不在工作区内: ${config.authFileArchiveDir}`);
-    }
-
-    const relativePath = path.relative(ROOT_DIR, filePath);
-    const segments = relativePath.split(path.sep);
-    if (segments[0] === 'tokens') segments.shift();
-
-    const targetPath = path.resolve(archiveRoot, ...segments);
-    const targetRelative = path.relative(ROOT_DIR, targetPath);
-    if (targetRelative.startsWith('..') || path.isAbsolute(targetRelative)) {
-        throw new Error(`归档目标不在工作区内: ${targetPath}`);
-    }
-
-    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-    fs.copyFileSync(filePath, targetPath);
-    return targetPath;
-}
-
-async function uploadAuthFiles(config, job, filePaths) {
-    if (!config.authFileUploadUrl || filePaths.length === 0) return { uploaded: 0, failed: [] };
-
-    const uploaded = [];
-    const failed = [];
-
-    for (const filePath of filePaths) {
-        const relativePath = path.relative(ROOT_DIR, filePath).replace(/\\/g, '/');
-        try {
-            const form = new FormData();
-            const content = fs.readFileSync(filePath);
-            const blob = new Blob([content], { type: 'application/json' });
-            form.append(config.authFileUploadField, blob, path.basename(filePath));
-            form.append('jobId', job.id);
-            form.append('workerId', config.workerId);
-            form.append('path', relativePath);
-
-            const headers = {};
-            if (config.authFileUploadToken) {
-                headers.Authorization = `Bearer ${config.authFileUploadToken}`;
-            }
-
-            const response = await fetch(config.authFileUploadUrl, {
-                method: 'POST',
-                headers,
-                body: form,
-            });
-
-            if (!response.ok) {
-                const body = await response.text().catch(() => '');
-                throw new Error(`HTTP ${response.status} ${body.slice(0, 300)}`);
-            }
-
-            const archivedPath = archiveUploadedAuthFile(config, filePath);
-            uploaded.push(relativePath);
-            console.log(`[Agent] 已上传认证文件: ${relativePath}`);
-            console.log(`[Agent] 已复制到归档目录: ${path.relative(ROOT_DIR, archivedPath).replace(/\\/g, '/')}`);
-        } catch (error) {
-            failed.push({ path: relativePath, error: error.message });
-            console.warn(`[Agent] 上传认证文件失败: ${relativePath} -> ${error.message}`);
-        }
-    }
-
-    return { uploaded: uploaded.length, failed };
 }
 
 function runMainScript(job) {
@@ -511,7 +359,6 @@ async function executeJob(client, config, job) {
 
     const jobConfig = resolveJobConfig(config, job);
     const startedAt = new Date().toISOString();
-    const beforeUploadSnapshot = snapshotUploadFiles(jobConfig);
     try {
         await reportStatus(client, config, job.id, 'running', {
             startedAt,
@@ -529,28 +376,27 @@ async function executeJob(client, config, job) {
         if (Array.isArray(jobConfig.tokenOutputDirs) && jobConfig.tokenOutputDirs.length > 0) {
             runJob.env.TOKEN_OUTPUT_DIRS = jobConfig.tokenOutputDirs.join(',');
         }
+        runJob.env.AUTH_FILE_UPLOAD_URL = jobConfig.authFileUploadUrl || '';
+        runJob.env.AUTH_FILE_UPLOAD_TOKEN = jobConfig.authFileUploadToken || '';
+        runJob.env.AUTH_FILE_UPLOAD_FIELD = jobConfig.authFileUploadField || DEFAULT_CONFIG.authFileUploadField;
+        runJob.env.AUTH_FILE_UPLOAD_MAX_BYTES = String(jobConfig.authFileUploadMaxBytes || DEFAULT_CONFIG.authFileUploadMaxBytes);
+        runJob.env.AUTH_FILE_UPLOAD_JOB_ID = String(job.id || '');
+        runJob.env.AUTH_FILE_UPLOAD_WORKER_ID = String(config.workerId || '');
+        runJob.env.AUTH_FILE_UPLOAD_TARGET = String(jobConfig.uploadTarget || job.uploadTarget || 'cpa');
 
         const result = await runMainScript(runJob);
         const finishedAt = new Date().toISOString();
-        const changedFiles = collectChangedUploadFiles(jobConfig, beforeUploadSnapshot);
-        const uploadResult = await uploadAuthFiles(jobConfig, job, changedFiles);
-        const uploadSummary = uploadResult.uploaded || uploadResult.failed.length
-            ? `\n[Agent] auth file upload: uploaded=${uploadResult.uploaded}, failed=${uploadResult.failed.length}`
-            : '';
-        const uploadErrors = uploadResult.failed.length
-            ? `\n${uploadResult.failed.map(item => `${item.path}: ${item.error}`).join('\n')}`
-            : '';
 
         const ok = result.exitCode === 0;
         await reportStatus(client, config, job.id, ok ? 'success' : 'failed', {
             finishedAt,
             exitCode: result.exitCode,
             signal: result.signal,
-            stdoutTail: keepTail(`${result.stdoutTail}${uploadSummary}`, 20000),
-            stderrTail: keepTail(`${result.stderrTail}${uploadErrors}`, 20000),
+            stdoutTail: keepTail(result.stdoutTail, 20000),
+            stderrTail: keepTail(result.stderrTail, 20000),
         });
 
-        console.log(`[Agent] 任务 ${job.id} ${ok ? '完成' : '失败'}，exitCode=${result.exitCode}, uploaded=${uploadResult.uploaded}`);
+        console.log(`[Agent] 任务 ${job.id} ${ok ? '完成' : '失败'}，exitCode=${result.exitCode}`);
     } finally {
         clearLock();
     }

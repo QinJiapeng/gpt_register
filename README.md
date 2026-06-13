@@ -273,19 +273,18 @@ Agent 只允许这些参数：
 
 ### 认证文件上传
 
-如果配置了 `authFileUploadUrl`，Agent 会在任务执行完成后上传本次新增或修改的 `tokens/*.json` 文件。
+如果配置了 `authFileUploadUrl`，Agent 会把上传配置传给注册进程。每次 Token JSON 保存成功后，`index.js` 会立即上传本次保存的文件。
 
 ```json
 {
   "authFileUploadUrl": "http://170.106.140.71:8317/v0/management/auth-files",
   "authFileUploadToken": "YOUR_AUTH_FILE_UPLOAD_TOKEN",
   "authFileUploadField": "file",
-  "authFileUploadDirs": ["tokens"],
-  "authFileArchiveDir": "tokens_old"
+  "authFileUploadMaxBytes": 2097152
 }
 ```
 
-上传成功后，Agent 会把对应文件复制到 `tokens_old/`。上传失败的文件不会复制。
+如果一个任务一次性注册 5 个账号，成功生成第 1 个 Token JSON 后会立即上传第 1 个，不会等 5 个全部完成。上传失败的文件不会删除或移动。
 
 上传方式是 `multipart/form-data`，默认文件字段名是 `file`，请求头为：
 

@@ -8,6 +8,7 @@ const { MailProvider } = require('./src/mailProvider');
 const { BrowserService } = require('./src/browserService');
 const { OAuthService } = require('./src/oauthService');
 const { generateRandomName, generateRandomPassword } = require('./src/randomIdentity');
+const { uploadAuthFiles } = require('./src/authFileUploader');
 const config = require('./src/config');
 
 const { logFilePath } = initRunLogger(process.cwd());
@@ -33,9 +34,24 @@ const PHASE8_ACCOUNT_DELAY_MS = 60 * 1000;
 const MAIL_PROVIDER = String(config.mailProvider || '').toLowerCase();
 const TOKEN_AUTH_MAIL_PROVIDERS = new Set(['cloud-mail', 'cloudflare-worker']);
 let SELECTED_PHONE_COUNTRY = null;
-let SELECTED_SMS_OPERATOR = '';
-const SMS_OPERATOR_SELECTION_THRESHOLD = 20;
 const BATCH_FAILURES = [];
+
+async function uploadSavedTokenFiles(tokenData, label = 'Token') {
+    const savedPaths = Array.isArray(tokenData?.savedPaths) ? tokenData.savedPaths : [];
+    if (savedPaths.length === 0) return;
+    if (!String(process.env.AUTH_FILE_UPLOAD_URL || '').trim()) return;
+
+    const result = await uploadAuthFiles(savedPaths, { rootDir: process.cwd() });
+    for (const relativePath of result.uploaded) {
+        console.log(`[Upload] ${label} 已上传: ${relativePath}`);
+    }
+    for (const relativePath of result.skipped) {
+        console.log(`[Upload] ${label} 跳过上传: ${relativePath}`);
+    }
+    for (const item of result.failed) {
+        console.warn(`[Upload] ${label} 上传失败: ${item.path} -> ${item.error}`);
+    }
+}
 
 function isProxyConnectionError(error) {
     const msg = String(error?.message || '');
@@ -306,21 +322,21 @@ function findConfiguredCountryByCode(isoCode) {
 }
 
 function getDefaultPhoneCountry() {
-    const byArg = findConfiguredCountryByCode(COUNTRY_ARG);
-    if (byArg) return byArg;
-
     const byConfigCode = findConfiguredCountryByCode(config.phoneCountryCode);
     if (byConfigCode) return byConfigCode;
+
+    const byArg = findConfiguredCountryByCode(COUNTRY_ARG);
+    if (byArg) return byArg;
 
     const byHeroSmsCountry = getConfiguredPhoneCountries().find(item => Number(item.heroSmsCountry) === Number(config.heroSmsCountry));
     if (byHeroSmsCountry) return byHeroSmsCountry;
 
     return getConfiguredPhoneCountries()[0] || {
-        isoCode: 'GB',
-        dialCode: '44',
-        name: '英国',
+        isoCode: 'BR',
+        dialCode: '55',
+        name: '巴西',
         aliases: [],
-        heroSmsCountry: Number(config.heroSmsCountry) || 16,
+        heroSmsCountry: Number(config.heroSmsCountry) || 73,
     };
 }
 
@@ -433,25 +449,13 @@ function applyHeroSmsMaxPrice(rows) {
 
     const filtered = rows.filter((row) => {
         const price = Number(row.price);
-        return Number.isFinite(price) && price <= maxPrice;
+        return Number.isFinite(price) && price > 0 && price <= maxPrice;
     });
     const removed = rows.length - filtered.length;
     if (removed > 0) {
-        console.log(`[SMS] 已过滤高于 $${maxPrice.toFixed(3)} 的报价 ${removed} 条`);
+        console.log(`[SMS] 已过滤无效或高于 $${maxPrice.toFixed(3)} 的报价 ${removed} 条`);
     }
     return filtered;
-}
-
-function printOperatorOptionTable(rows, country) {
-    console.log(`\n[SMS] ${country.name} 可选运营商 / 报价列表`);
-    console.log('序号 | 运营商 | 价格($) | 库存 | 说明');
-    console.log('---- | ------ | ------- | ---- | ----');
-    rows.forEach((row, index) => {
-        const price = Number.isFinite(Number(row.price)) ? Number(row.price).toFixed(4) : '-';
-        const stock = Number.isFinite(Number(row.count)) ? String(row.count) : '-';
-        const note = row.note || '';
-        console.log(`${String(index + 1).padEnd(4)} | ${String(row.label).padEnd(6)} | ${price.padEnd(7)} | ${stock.padEnd(4)} | ${note}`);
-    });
 }
 
 async function promptUserToChooseCountry(rows, defaultCountry) {
@@ -486,117 +490,14 @@ async function promptUserToChooseCountry(rows, defaultCountry) {
     }
 }
 
-async function promptUserToChooseOperator(rows, defaultOption, country) {
-    if (!process.stdin.isTTY || !process.stdout.isTTY) {
-        console.log(`[SMS] 当前不是交互终端，自动使用默认运营商: ${defaultOption.label} (${country.name})`);
-        return defaultOption;
-    }
-
-    const rl = readline.createInterface({
-        input: process.stdin,
-        output: process.stdout,
-    });
-
-    try {
-        while (true) {
-            const answer = (await rl.question(`请选择 ${country.name} 的运营商（输入序号 / 名称，直接回车默认 ${defaultOption.label}）: `)).trim();
-            if (!answer) return defaultOption;
-
-            const byIndex = rows[Number.parseInt(answer, 10) - 1];
-            if (byIndex) return byIndex;
-
-            const lowered = answer.toLowerCase();
-            const byName = rows.find(item => item.operator.toLowerCase() === lowered || item.label.toLowerCase() === lowered);
-            if (byName) return byName;
-
-            console.log('[SMS] 运营商选择无效，请重新输入。');
-        }
-    } finally {
-        rl.close();
-    }
-}
-
-async function resolveRunSmsOperator(phoneCountry, options = {}) {
-    const { debug = false } = options;
-    const smsProvider = new SMSProvider(config.heroSmsApiKey);
-    const countryId = Number(phoneCountry?.heroSmsCountry);
-    if (!Number.isFinite(countryId)) {
-        return { operator: '', label: '任何运营商', price: phoneCountry?.price ?? null, count: phoneCountry?.count ?? null, note: '国家未绑定 HeroSMS ID，跳过运营商选择' };
-    }
-
-    try {
-        const aggregateCount = Number(phoneCountry?.count);
-        if (Number.isFinite(aggregateCount) && aggregateCount >= SMS_OPERATOR_SELECTION_THRESHOLD) {
-            console.log(`[SMS] ${phoneCountry.name} 当前聚合库存 ${aggregateCount}，不触发二次运营商选择`);
-            return {
-                operator: '',
-                label: '任何运营商',
-                price: phoneCountry?.price ?? null,
-                count: phoneCountry?.count ?? null,
-                note: `聚合库存 >= ${SMS_OPERATOR_SELECTION_THRESHOLD}`,
-            };
-        }
-
-        const operatorOptions = applyHeroSmsMaxPrice(
-            await smsProvider.getOperatorQuoteOptions(config.heroSmsService, countryId)
-        );
-        if (debug) {
-            console.log(`[SMS][Debug] operatorOptions(${countryId})=${JSON.stringify(operatorOptions.slice(0, 20))}`);
-        }
-
-        const aggregateOption = {
-            operator: '',
-            label: '任何运营商',
-            price: phoneCountry?.price ?? null,
-            count: phoneCountry?.count ?? null,
-            note: '国家聚合库存',
-        };
-
-        if (operatorOptions.length === 0) {
-            console.log(`[SMS] ${phoneCountry.name} 未返回运营商列表，使用「任何运营商」`);
-            return aggregateOption;
-        }
-
-        const rows = [
-            aggregateOption,
-            ...operatorOptions.map((item) => ({
-                ...item,
-                label: item.operator,
-                note: item.error ? `查询失败: ${item.error}` : '运营商聚合库存',
-            })),
-        ];
-
-        console.log(`[SMS] ${phoneCountry.name} 聚合库存 ${Number.isFinite(aggregateCount) ? aggregateCount : '-'}，低于 ${SMS_OPERATOR_SELECTION_THRESHOLD}，进入运营商二次选择`);
-        printOperatorOptionTable(rows, phoneCountry);
-
-        const betterOption = operatorOptions.find(item =>
-            Number.isFinite(Number(item.count)) && Number(item.count) > Number(phoneCountry?.count || 0)
-        );
-        const defaultOption = betterOption
-            ? rows.find(item => item.operator === betterOption.operator) || aggregateOption
-            : aggregateOption;
-
-        const selected = await promptUserToChooseOperator(rows, defaultOption, phoneCountry);
-        console.log(`[SMS] 已选择运营商: ${selected.label} (${phoneCountry.name})`);
-        return selected;
-    } catch (error) {
-        console.warn(`[SMS] 获取 ${phoneCountry.name} 运营商列表失败，使用「任何运营商」: ${error.message}`);
-        return {
-            operator: '',
-            label: '任何运营商',
-            price: phoneCountry?.price ?? null,
-            count: phoneCountry?.count ?? null,
-            note: '运营商接口失败，回退聚合库存',
-        };
-    }
-}
-
 async function resolveRunPhoneCountry(options = {}) {
     const { debug = false } = options;
     const configuredCountries = getConfiguredPhoneCountries();
     const defaultCountry = getDefaultPhoneCountry();
     const smsProvider = new SMSProvider(config.heroSmsApiKey);
-    const forcedCountry = findConfiguredCountryByCode(COUNTRY_ARG);
+    const forcedCountry = config.phoneCountryCode
+        ? null
+        : findConfiguredCountryByCode(COUNTRY_ARG);
 
     let countriesForPricing = configuredCountries
         .filter(item => hasNumericValue(item.heroSmsCountry));
@@ -630,7 +531,7 @@ async function resolveRunPhoneCountry(options = {}) {
         console.warn('[SMS] 没有可用于 HeroSMS 的国家列表，使用默认国家');
         return {
             ...defaultCountry,
-            heroSmsCountry: Number(defaultCountry.heroSmsCountry) || Number(config.heroSmsCountry) || 16,
+            heroSmsCountry: Number(defaultCountry.heroSmsCountry) || Number(config.heroSmsCountry) || 73,
         };
     }
 
@@ -744,7 +645,7 @@ async function resolveRunPhoneCountry(options = {}) {
         console.warn(`[SMS] 获取 HeroSMS 价格失败，回退到默认国家: ${error.message}`);
         return {
             ...defaultCountry,
-            heroSmsCountry: Number(defaultCountry.heroSmsCountry) || Number(config.heroSmsCountry) || 16,
+            heroSmsCountry: Number(defaultCountry.heroSmsCountry) || Number(config.heroSmsCountry) || 73,
         };
     }
 }
@@ -754,8 +655,7 @@ async function runSmsCountryDebug() {
     console.log(`[测试] service=${config.heroSmsService}, 默认国家=${config.phoneCountryCode}, 配置国家数=${getConfiguredPhoneCountries().length}`);
     const selected = await resolveRunPhoneCountry({ debug: true });
     console.log(`[测试] 最终选择结果: ${selected.name} (+${selected.dialCode}), HeroSMS 国家ID=${selected.heroSmsCountry}`);
-    const selectedOperator = await resolveRunSmsOperator(selected, { debug: true });
-    console.log(`[测试] 最终运营商结果: ${selectedOperator.label}`);
+    console.log('[测试] 运营商: 任何运营商（不传 operator 参数）');
 }
 
 function getUsernameRecords() {
@@ -828,7 +728,7 @@ function saveAccount(phone, password, name, birthDate, phoneCountry = null, smsO
         phoneCountryDialCode: resolvedCountry?.dialCode || '',
         phoneCountryName: resolvedCountry?.name || '',
         heroSmsCountry: resolvedCountry?.heroSmsCountry || null,
-        smsOperator: smsOperator || SELECTED_SMS_OPERATOR || '',
+        smsOperator: smsOperator || '',
         createdAt: new Date().toISOString(),
         status: 'registered',
     });
@@ -1010,7 +910,7 @@ function saveUsernameFile({ email, phone, password, name, birthDate, status, pho
         phoneCountryDialCode: resolvedCountry?.dialCode || account?.phoneCountryDialCode || '',
         phoneCountryName: resolvedCountry?.name || account?.phoneCountryName || '',
         heroSmsCountry: resolvedCountry?.heroSmsCountry || account?.heroSmsCountry || null,
-        smsOperator: smsOperator || account?.smsOperator || SELECTED_SMS_OPERATOR || '',
+        smsOperator: smsOperator || account?.smsOperator || '',
         createdAt: account?.createdAt || new Date().toISOString(),
         status: status || account?.status || 'registered',
     };
@@ -1034,108 +934,11 @@ function saveUsernameFile({ email, phone, password, name, birthDate, status, pho
     console.log(`[账号] 已追加保存账户信息: ${USERNAME_FILE} (共 ${usernameList.length} 条)`);
 }
 
-function isSmsNoNumbersError(error) {
-    return error?.code === 'SMS_NO_NUMBERS' || String(error?.message || '').includes('当前无可用号码');
-}
-
-function describeSmsNumberCandidate(candidate) {
-    const operatorLabel = candidate.operator ? `运营商 ${candidate.operator}` : '任何运营商';
-    const priceLabel = Number.isFinite(Number(candidate.price))
-        ? `, 价格 $${Number(candidate.price).toFixed(4)}`
-        : '';
-    return `${operatorLabel}${priceLabel}`;
-}
-
-function sortSmsQuoteOptions(options = []) {
-    return [...options].sort((a, b) => {
-        const priceA = Number(a.price);
-        const priceB = Number(b.price);
-        if (priceA !== priceB) return priceA - priceB;
-        return (Number(b.count) || 0) - (Number(a.count) || 0);
-    });
-}
-
-async function getNumberWithPriceFallback(smsProvider, phoneCountry) {
+async function getNumberWithDefaultOperator(smsProvider, phoneCountry) {
     const service = config.heroSmsService;
     const countryId = Number(phoneCountry?.heroSmsCountry) || config.heroSmsCountry;
-    const attemptedOperators = new Set();
-    let lastNoNumbersError = null;
-    const initialOperator = String(SELECTED_SMS_OPERATOR || '').trim();
-    let failedPrice = !initialOperator && Number.isFinite(Number(phoneCountry?.price))
-        ? Number(phoneCountry.price)
-        : null;
-
-    const tryCandidate = async (candidate) => {
-        const operator = String(candidate.operator || '').trim();
-        if (attemptedOperators.has(operator)) return false;
-        attemptedOperators.add(operator);
-
-        console.log(`[SMS] 尝试获取号码: ${describeSmsNumberCandidate(candidate)}`);
-        try {
-            await smsProvider.getNumber(service, countryId, 1, operator);
-            SELECTED_SMS_OPERATOR = operator;
-            return true;
-        } catch (error) {
-            if (!isSmsNoNumbersError(error)) throw error;
-
-            lastNoNumbersError = error;
-            const candidatePrice = Number(candidate.price);
-            if (Number.isFinite(candidatePrice)) {
-                failedPrice = candidatePrice;
-            }
-            console.warn(`[SMS] ${describeSmsNumberCandidate(candidate)} 无可用号码，切换到下一个不超过最高价的报价`);
-            return false;
-        }
-    };
-
-    const initialCandidate = {
-        operator: initialOperator,
-        price: initialOperator ? null : phoneCountry?.price,
-    };
-    if (await tryCandidate(initialCandidate)) return true;
-
-    const quoteOptions = sortSmsQuoteOptions(applyHeroSmsMaxPrice(
-        await smsProvider.getOperatorQuoteOptions(service, countryId)
-    ).filter((item) => {
-        if (!item.operator || item.error) return false;
-        const count = Number(item.count);
-        return !Number.isFinite(count) || count > 0;
-    }));
-
-    if (initialOperator && failedPrice === null) {
-        const failedQuote = quoteOptions.find(item => item.operator === initialOperator);
-        const quotedPrice = Number(failedQuote?.price);
-        if (Number.isFinite(quotedPrice)) {
-            failedPrice = quotedPrice;
-        }
-    }
-
-    const fallbackOptions = quoteOptions.filter((item) => {
-        const operator = String(item.operator || '').trim();
-        if (!operator || attemptedOperators.has(operator)) return false;
-
-        const price = Number(item.price);
-        if (!Number.isFinite(price)) return false;
-
-        // 默认“任何运营商”拿到的是当前国家最低价；失败后按就近原则尝试更高价位。
-        if (failedPrice !== null && price <= failedPrice) return false;
-
-        return true;
-    });
-
-    if (fallbackOptions.length > 0) {
-        console.log(`[SMS] 可切换报价 ${fallbackOptions.length} 条，将按价格从低到高尝试`);
-    }
-
-    for (const option of fallbackOptions) {
-        const optionPrice = Number(option.price);
-        if (failedPrice !== null && Number.isFinite(optionPrice) && optionPrice <= failedPrice) {
-            continue;
-        }
-        if (await tryCandidate(option)) return true;
-    }
-
-    throw lastNoNumbersError || new Error('当前最高价格范围内没有可用号码');
+    console.log('[SMS] 尝试获取号码: 任何运营商（不传 operator 参数）');
+    await smsProvider.getNumber(service, countryId);
 }
 
 /**
@@ -1150,7 +953,7 @@ async function phase1(smsProvider, browserService, userData, phoneCountry) {
     await browserService.navigateToSignup();
 
     // 2. 浏览器就绪后，才获取手机号（花钱操作尽量靠后）
-    await getNumberWithPriceFallback(smsProvider, phoneCountry);
+    await getNumberWithDefaultOperator(smsProvider, phoneCountry);
     await smsProvider.markReady();
 
     let numberUsed = false;
@@ -1178,7 +981,7 @@ async function phase1(smsProvider, browserService, userData, phoneCountry) {
         }
 
         // 6. 保存账号信息；SMS 激活延后到整条链路成功后再完成
-        saveAccount(smsProvider.getPhone(), userData.password, userData.fullName, userData.birthDate, phoneCountry, SELECTED_SMS_OPERATOR);
+        saveAccount(smsProvider.getPhone(), userData.password, userData.fullName, userData.birthDate, phoneCountry, '');
 
         console.log('[阶段1] ChatGPT 注册流程完成！');
         return true;
@@ -1329,6 +1132,7 @@ async function phase3(smsProvider, mailProvider, browserService, oauthService, u
 
     // 用授权码换取 Token
     const tokenData = await oauthService.exchangeTokenAndSave(params.code, mailProvider.getEmail());
+    await uploadSavedTokenFiles(tokenData, 'Token');
     return tokenData;
 }
 
@@ -1351,7 +1155,7 @@ async function runSingleRegistration() {
         name: '',
         country: '',
         phoneCountryCode: '',
-        smsOperator: SELECTED_SMS_OPERATOR || '',
+        smsOperator: '',
         mailDomain: selectedMailDomain,
     };
 
@@ -1400,7 +1204,6 @@ async function runSingleRegistration() {
             }
             console.log(`[主程序] Phase2 模式: 使用账号 ${account.phone} (${account.name})`);
             smsProvider.phoneNumber = account.phone;
-            SELECTED_SMS_OPERATOR = String(account.smsOperator || '').trim();
             const phoneCountry = resolvePhoneCountryForPhone(account.phone, {
                 isoCode: account.phoneCountryCode,
                 dialCode: account.phoneCountryDialCode,
@@ -1419,7 +1222,7 @@ async function runSingleRegistration() {
                 phone: account.phone,
                 name: account.name,
                 phoneCountryCode: phoneCountry?.isoCode || '',
-                smsOperator: SELECTED_SMS_OPERATOR || '',
+                smsOperator: account.smsOperator || '',
             });
 
             // 先完成首次登录 about-you
@@ -1442,7 +1245,7 @@ async function runSingleRegistration() {
                 birthDate: account.birthDate,
                 status: 'email_bound',
                 phoneCountry,
-                smsOperator: account.smsOperator || SELECTED_SMS_OPERATOR || '',
+                smsOperator: account.smsOperator || '',
             });
 
             console.log('[主程序] Phase2 完成，已停在邮箱绑定收尾状态');
@@ -1455,18 +1258,18 @@ async function runSingleRegistration() {
         console.log(`[主程序] 用户: ${userData.fullName}, 年龄: ${userData.age}, 生日: ${userData.birthDate}`);
         const phoneCountry = SELECTED_PHONE_COUNTRY || getDefaultPhoneCountry();
         console.log(`[SMS] 本轮使用国家: ${phoneCountry.name} (+${phoneCountry.dialCode}), HeroSMS 国家ID=${phoneCountry.heroSmsCountry}`);
-        console.log(`[SMS] 本轮使用运营商: ${SELECTED_SMS_OPERATOR || '任何运营商'}`);
+        console.log('[SMS] 本轮使用运营商: 任何运营商（不传 operator 参数）');
         Object.assign(runContext, {
             name: userData.fullName,
             phoneCountryCode: phoneCountry?.isoCode || '',
-            smsOperator: SELECTED_SMS_OPERATOR || '',
+            smsOperator: '',
         });
 
         // 1. 第一阶段：手机号注册
         runContext.stage = 'phase1_register';
         await phase1(smsProvider, browserService, userData, phoneCountry);
         runContext.phone = smsProvider.getPhone();
-        runContext.smsOperator = SELECTED_SMS_OPERATOR || '';
+        runContext.smsOperator = '';
 
         // 1.5. 首次登录完成个人资料
         runContext.stage = 'phase1_5_profile';
@@ -1489,7 +1292,7 @@ async function runSingleRegistration() {
             birthDate: userData.birthDate,
             status: 'email_bound',
             phoneCountry,
-            smsOperator: SELECTED_SMS_OPERATOR || '',
+            smsOperator: '',
         });
 
         if (STOP_AFTER_PHASE2) {
@@ -1625,6 +1428,7 @@ async function runPhase8ForEntry(entry, index, total) {
         }
 
         const tokenData = await oauthService.exchangeTokenAndSave(params.code, email);
+        await uploadSavedTokenFiles(tokenData, `Phase8 ${index}/${total}`);
         console.log(`[Phase8] (${index}/${total}) token saved for ${tokenData.email}`);
         return tokenData;
     };
@@ -1733,21 +1537,40 @@ async function startPhase3Only() {
     console.log('[Phase3] done');
 }
 
-async function checkTokenCount() {
-    if (!fs.existsSync(TOKEN_OUTPUT_DIR)) return 0;
-    return fs.readdirSync(TOKEN_OUTPUT_DIR).filter(f => f.startsWith('codex-') && f.endsWith('-free.json')).length;
+function listTokenFiles() {
+    if (!fs.existsSync(TOKEN_OUTPUT_DIR)) return [];
+    return fs.readdirSync(TOKEN_OUTPUT_DIR)
+        .filter(f => f.startsWith('codex-') && f.endsWith('-free.json'))
+        .map(file => path.join(TOKEN_OUTPUT_DIR, file));
 }
 
-/**
- * 归档已有 tokens
- */
-function archiveExistingTokens() {
-    if (!fs.existsSync(TOKEN_OUTPUT_DIR)) return;
-    const files = fs.readdirSync(TOKEN_OUTPUT_DIR).filter(f => f.startsWith('codex-') && f.endsWith('-free.json'));
-    for (const file of files) {
-        fs.renameSync(path.join(TOKEN_OUTPUT_DIR, file), path.join(TOKEN_OUTPUT_DIR, `old_${file}`));
-        console.log(`[归档] ${file} → old_${file}`);
+function snapshotTokenFiles() {
+    const snapshot = new Map();
+    for (const filePath of listTokenFiles()) {
+        try {
+            const stat = fs.statSync(filePath);
+            snapshot.set(filePath, `${stat.mtimeMs}:${stat.size}`);
+        } catch (error) {
+            // Ignore files that disappear while scanning.
+        }
     }
+    return snapshot;
+}
+
+async function checkTokenCount(startSnapshot = new Map()) {
+    let count = 0;
+    for (const filePath of listTokenFiles()) {
+        try {
+            const stat = fs.statSync(filePath);
+            const signature = `${stat.mtimeMs}:${stat.size}`;
+            if (startSnapshot.get(filePath) !== signature) {
+                count += 1;
+            }
+        } catch (error) {
+            // Ignore files that disappear while scanning.
+        }
+    }
+    return count;
 }
 
 /**
@@ -1783,8 +1606,6 @@ async function startBatch() {
 
     if (!PHASE2_ONLY) {
         SELECTED_PHONE_COUNTRY = await resolveRunPhoneCountry();
-        const operatorSelection = await resolveRunSmsOperator(SELECTED_PHONE_COUNTRY);
-        SELECTED_SMS_OPERATOR = operatorSelection?.operator || '';
     }
 
     if (PHASE2_ONLY || STOP_AFTER_PHASE2) {
@@ -1805,8 +1626,8 @@ async function startBatch() {
                     console.error('[主程序] Phase2 流程失败，立即进入下一轮...');
                     continue;
                 }
-                console.error('[主程序] Phase2 流程失败，30 秒后重试...');
-                await new Promise(r => setTimeout(r, 30000));
+                console.error('[主程序] Phase2 流程失败，5 秒后重试...');
+                await new Promise(r => setTimeout(r, 5000));
             }
         }
 
@@ -1817,12 +1638,12 @@ async function startBatch() {
         return;
     }
 
-    archiveExistingTokens();
+    const tokenStartSnapshot = snapshotTokenFiles();
 
     while (true) {
-        const currentCount = await checkTokenCount();
+        const currentCount = await checkTokenCount(tokenStartSnapshot);
         if (currentCount >= TARGET_COUNT) {
-            console.log(`\n[完成] Token 数量 (${currentCount}) 已达目标 (${TARGET_COUNT})。`);
+            console.log(`\n[完成] 本次生成 Token 数量 (${currentCount}) 已达目标 (${TARGET_COUNT})。`);
             break;
         }
 
@@ -1840,8 +1661,8 @@ async function startBatch() {
                 console.error('[主程序] 注册失败，立即进入下一轮...');
                 continue;
             }
-            console.error('[主程序] 注册失败，30 秒后重试...');
-            await new Promise(r => setTimeout(r, 30000));
+            console.error('[主程序] 注册失败，5 秒后重试...');
+            await new Promise(r => setTimeout(r, 5000));
         }
     }
 

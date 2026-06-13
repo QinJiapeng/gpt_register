@@ -9,20 +9,12 @@
   "authFileUploadUrl": "http://170.106.140.71:8317/v0/management/auth-files",
   "authFileUploadToken": "YOUR_AUTH_FILE_UPLOAD_TOKEN",
   "authFileUploadField": "file",
-  "authFileUploadDirs": [
-    "tokens"
-  ],
-  "authFileUploadMaxFiles": 100,
   "authFileUploadMaxBytes": 2097152,
-  "authFileArchiveDir": "tokens_old",
   "authFileUploadTargets": {
     "sub2api": {
       "authFileUploadUrl": "",
       "authFileUploadToken": "",
       "authFileUploadField": "file",
-      "authFileUploadDirs": [
-        "tokens_sub2api"
-      ],
       "tokenOutputDirs": [
         "tokens_sub2api"
       ]

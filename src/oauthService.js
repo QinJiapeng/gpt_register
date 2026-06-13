@@ -329,7 +329,10 @@ class OAuthService {
             }
 
             console.log(`[OAuth] Token 成功保存至: ${savedPaths.join(' | ')}`);
-            return outData;
+            return {
+                ...outData,
+                savedPaths,
+            };
         } catch (error) {
             const apiErrorCode = error?.response?.data?.error?.code;
             if (apiErrorCode === 'unsupported_country_region_territory') {
