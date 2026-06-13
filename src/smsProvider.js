@@ -449,7 +449,10 @@ class SMSProvider {
                         await new Promise(r => setTimeout(r, 3000));
                         continue;
                     }
-                    throw new Error('当前无可用号码（重试耗尽）');
+                    const noNumbersError = new Error('当前无可用号码（重试耗尽）');
+                    noNumbersError.code = 'SMS_NO_NUMBERS';
+                    noNumbersError.operator = operator || '';
+                    throw noNumbersError;
                 }
                 throw new Error(`获取号码失败: ${data}`);
             }

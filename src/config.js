@@ -93,6 +93,12 @@ function parsePathList(value = '') {
         .filter(Boolean);
 }
 
+function parseOptionalNumber(value, defaultValue = null) {
+    if (value === undefined || value === null || value === '') return defaultValue;
+    const num = Number(value);
+    return Number.isFinite(num) ? num : defaultValue;
+}
+
 // 读取配置文件：基础 config.json + 环境覆盖文件
 function loadConfig() {
     const baseConfig = readJsonConfig(configPath);
@@ -138,6 +144,7 @@ module.exports = {
     heroSmsCountry: parseInt(config.heroSmsCountry, 10) || 16,
     heroSmsPromptCountrySelection: parseBoolean(config.heroSmsPromptCountrySelection, true),
     heroSmsCountryTopN: parseInt(config.heroSmsCountryTopN, 10) || 10,
+    heroSmsMaxPrice: parseOptionalNumber(config.heroSmsMaxPrice),
 
     // Cloudflare 临时邮箱
     mailBaseUrl: config.mailBaseUrl || '',

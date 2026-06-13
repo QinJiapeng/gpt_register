@@ -422,6 +422,26 @@ function printCountryPriceTable(rows, title = '[SMS] HeroSMS 最便宜国家 Top
     });
 }
 
+function getHeroSmsMaxPrice() {
+    const maxPrice = Number(config.heroSmsMaxPrice);
+    return Number.isFinite(maxPrice) && maxPrice > 0 ? maxPrice : null;
+}
+
+function applyHeroSmsMaxPrice(rows) {
+    const maxPrice = getHeroSmsMaxPrice();
+    if (maxPrice === null) return rows;
+
+    const filtered = rows.filter((row) => {
+        const price = Number(row.price);
+        return Number.isFinite(price) && price <= maxPrice;
+    });
+    const removed = rows.length - filtered.length;
+    if (removed > 0) {
+        console.log(`[SMS] 已过滤高于 $${maxPrice.toFixed(3)} 的报价 ${removed} 条`);
+    }
+    return filtered;
+}
+
 function printOperatorOptionTable(rows, country) {
     console.log(`\n[SMS] ${country.name} 可选运营商 / 报价列表`);
     console.log('序号 | 运营商 | 价格($) | 库存 | 说明');
@@ -517,7 +537,9 @@ async function resolveRunSmsOperator(phoneCountry, options = {}) {
             };
         }
 
-        const operatorOptions = await smsProvider.getOperatorQuoteOptions(config.heroSmsService, countryId);
+        const operatorOptions = applyHeroSmsMaxPrice(
+            await smsProvider.getOperatorQuoteOptions(config.heroSmsService, countryId)
+        );
         if (debug) {
             console.log(`[SMS][Debug] operatorOptions(${countryId})=${JSON.stringify(operatorOptions.slice(0, 20))}`);
         }
@@ -620,7 +642,7 @@ async function resolveRunPhoneCountry(options = {}) {
         }
         if (topCountries.length > 0) {
             const byId = new Map(countriesForPricing.map(item => [Number(item.heroSmsCountry), item]));
-            const rankedCountries = topCountries
+            const rankedCountries = applyHeroSmsMaxPrice(topCountries
                 .map((item) => {
                     let base = byId.get(Number(item.heroSmsCountry));
                     if (!base) {
@@ -638,7 +660,7 @@ async function resolveRunPhoneCountry(options = {}) {
                         count: item.count,
                     };
                 })
-                .filter(Boolean);
+                .filter(Boolean));
 
             console.log(`[SMS] Top Countries 返回 ${topCountries.length} 条，成功映射 ${rankedCountries.length} 条`);
 
@@ -681,7 +703,9 @@ async function resolveRunPhoneCountry(options = {}) {
     }
 
     try {
-        const pricedCountries = await smsProvider.listCountryPrices(config.heroSmsService, countriesForPricing);
+        const pricedCountries = applyHeroSmsMaxPrice(
+            await smsProvider.listCountryPrices(config.heroSmsService, countriesForPricing)
+        );
         if (debug) {
             console.log(`[SMS][Debug] pricedCountries count=${pricedCountries.length}`);
             console.log(`[SMS][Debug] pricedCountries sample=${JSON.stringify(pricedCountries.slice(0, 10))}`);
@@ -713,6 +737,10 @@ async function resolveRunPhoneCountry(options = {}) {
         console.log(`[SMS] 已选择国家: ${selected.name} (+${selected.dialCode})，HeroSMS 国家ID=${selected.heroSmsCountry}，价格 $${selected.price.toFixed(3)}`);
         return selected;
     } catch (error) {
+        const maxPrice = getHeroSmsMaxPrice();
+        if (maxPrice !== null) {
+            throw new Error(`获取 HeroSMS 价格失败，无法保证最高价格 $${maxPrice.toFixed(3)}: ${error.message}`);
+        }
         console.warn(`[SMS] 获取 HeroSMS 价格失败，回退到默认国家: ${error.message}`);
         return {
             ...defaultCountry,
@@ -1006,6 +1034,110 @@ function saveUsernameFile({ email, phone, password, name, birthDate, status, pho
     console.log(`[账号] 已追加保存账户信息: ${USERNAME_FILE} (共 ${usernameList.length} 条)`);
 }
 
+function isSmsNoNumbersError(error) {
+    return error?.code === 'SMS_NO_NUMBERS' || String(error?.message || '').includes('当前无可用号码');
+}
+
+function describeSmsNumberCandidate(candidate) {
+    const operatorLabel = candidate.operator ? `运营商 ${candidate.operator}` : '任何运营商';
+    const priceLabel = Number.isFinite(Number(candidate.price))
+        ? `, 价格 $${Number(candidate.price).toFixed(4)}`
+        : '';
+    return `${operatorLabel}${priceLabel}`;
+}
+
+function sortSmsQuoteOptions(options = []) {
+    return [...options].sort((a, b) => {
+        const priceA = Number(a.price);
+        const priceB = Number(b.price);
+        if (priceA !== priceB) return priceA - priceB;
+        return (Number(b.count) || 0) - (Number(a.count) || 0);
+    });
+}
+
+async function getNumberWithPriceFallback(smsProvider, phoneCountry) {
+    const service = config.heroSmsService;
+    const countryId = Number(phoneCountry?.heroSmsCountry) || config.heroSmsCountry;
+    const attemptedOperators = new Set();
+    let lastNoNumbersError = null;
+    const initialOperator = String(SELECTED_SMS_OPERATOR || '').trim();
+    let failedPrice = !initialOperator && Number.isFinite(Number(phoneCountry?.price))
+        ? Number(phoneCountry.price)
+        : null;
+
+    const tryCandidate = async (candidate) => {
+        const operator = String(candidate.operator || '').trim();
+        if (attemptedOperators.has(operator)) return false;
+        attemptedOperators.add(operator);
+
+        console.log(`[SMS] 尝试获取号码: ${describeSmsNumberCandidate(candidate)}`);
+        try {
+            await smsProvider.getNumber(service, countryId, 1, operator);
+            SELECTED_SMS_OPERATOR = operator;
+            return true;
+        } catch (error) {
+            if (!isSmsNoNumbersError(error)) throw error;
+
+            lastNoNumbersError = error;
+            const candidatePrice = Number(candidate.price);
+            if (Number.isFinite(candidatePrice)) {
+                failedPrice = candidatePrice;
+            }
+            console.warn(`[SMS] ${describeSmsNumberCandidate(candidate)} 无可用号码，切换到下一个不超过最高价的报价`);
+            return false;
+        }
+    };
+
+    const initialCandidate = {
+        operator: initialOperator,
+        price: initialOperator ? null : phoneCountry?.price,
+    };
+    if (await tryCandidate(initialCandidate)) return true;
+
+    const quoteOptions = sortSmsQuoteOptions(applyHeroSmsMaxPrice(
+        await smsProvider.getOperatorQuoteOptions(service, countryId)
+    ).filter((item) => {
+        if (!item.operator || item.error) return false;
+        const count = Number(item.count);
+        return !Number.isFinite(count) || count > 0;
+    }));
+
+    if (initialOperator && failedPrice === null) {
+        const failedQuote = quoteOptions.find(item => item.operator === initialOperator);
+        const quotedPrice = Number(failedQuote?.price);
+        if (Number.isFinite(quotedPrice)) {
+            failedPrice = quotedPrice;
+        }
+    }
+
+    const fallbackOptions = quoteOptions.filter((item) => {
+        const operator = String(item.operator || '').trim();
+        if (!operator || attemptedOperators.has(operator)) return false;
+
+        const price = Number(item.price);
+        if (!Number.isFinite(price)) return false;
+
+        // 默认“任何运营商”拿到的是当前国家最低价；失败后按就近原则尝试更高价位。
+        if (failedPrice !== null && price <= failedPrice) return false;
+
+        return true;
+    });
+
+    if (fallbackOptions.length > 0) {
+        console.log(`[SMS] 可切换报价 ${fallbackOptions.length} 条，将按价格从低到高尝试`);
+    }
+
+    for (const option of fallbackOptions) {
+        const optionPrice = Number(option.price);
+        if (failedPrice !== null && Number.isFinite(optionPrice) && optionPrice <= failedPrice) {
+            continue;
+        }
+        if (await tryCandidate(option)) return true;
+    }
+
+    throw lastNoNumbersError || new Error('当前最高价格范围内没有可用号码');
+}
+
 /**
  * 第一阶段：用手机号注册 ChatGPT
  */
@@ -1018,12 +1150,7 @@ async function phase1(smsProvider, browserService, userData, phoneCountry) {
     await browserService.navigateToSignup();
 
     // 2. 浏览器就绪后，才获取手机号（花钱操作尽量靠后）
-    await smsProvider.getNumber(
-        config.heroSmsService,
-        Number(phoneCountry?.heroSmsCountry) || config.heroSmsCountry,
-        5,
-        SELECTED_SMS_OPERATOR || ''
-    );
+    await getNumberWithPriceFallback(smsProvider, phoneCountry);
     await smsProvider.markReady();
 
     let numberUsed = false;
@@ -1339,6 +1466,7 @@ async function runSingleRegistration() {
         runContext.stage = 'phase1_register';
         await phase1(smsProvider, browserService, userData, phoneCountry);
         runContext.phone = smsProvider.getPhone();
+        runContext.smsOperator = SELECTED_SMS_OPERATOR || '';
 
         // 1.5. 首次登录完成个人资料
         runContext.stage = 'phase1_5_profile';
