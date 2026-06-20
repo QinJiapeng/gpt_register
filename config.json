@@ -1,9 +1,9 @@
 {
   "heroSmsApiKey": "6fb7f42f273A0d565f8f5f12ce9A657f",
   "heroSmsService": "dr",
-  "heroSmsCountry": 73,
+  "heroSmsCountry": 33,
   "heroSmsMaxPrice": 0.05,
-  "phoneCountryCode": "BR",
+  "phoneCountryCode": "CO",
   "mailProvider": "cloudflare-worker",
   "mailBaseUrl": "https://gptfree.550717.xyz",
   "mailAdminToken": "123@Huya",
