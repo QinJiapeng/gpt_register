@@ -42,7 +42,7 @@ const DEFAULT_PHONE_COUNTRIES = [
     { isoCode: 'MX', dialCode: '52', name: '墨西哥', aliases: ['Mexico'] },
     { isoCode: 'AR', dialCode: '54', name: '阿根廷', aliases: ['Argentina'] },
     { isoCode: 'CL', dialCode: '56', name: '智利', aliases: ['Chile'] },
-    { isoCode: 'CO', dialCode: '57', name: '哥伦比亚', aliases: ['Colombia'] },
+    { isoCode: 'CO', dialCode: '57', name: '哥伦比亚', aliases: ['Colombia'], heroSmsCountry: 33 },
     { isoCode: 'PE', dialCode: '51', name: '秘鲁', aliases: ['Peru'] },
     { isoCode: 'ZA', dialCode: '27', name: '南非', aliases: ['South Africa'] },
     { isoCode: 'EG', dialCode: '20', name: '埃及', aliases: ['Egypt'] },

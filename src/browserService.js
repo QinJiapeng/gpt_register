@@ -750,17 +750,17 @@ class BrowserService {
     }
 
     /**
-     * 选择国家代码（英国 = 44）
+     * 选择国家代码（哥伦比亚 = 57）
      *
      * 支持两种选择器:
      * 1. chatgpt.com 注册弹窗: 标准 <select> 元素
      * 2. auth.openai.com 登录页: React Aria Select 组件（按钮 + 虚拟化 listbox）
-     *    - 底层有隐藏 <select>（value 为国家ISO代码如 "GB"）
-     *    - 打开后显示虚拟化列表（只渲染可见项），data-key="GB" 标识选项
+     *    - 底层有隐藏 <select>（value 为国家ISO代码如 "CO"）
+     *    - 打开后显示虚拟化列表（只渲染可见项），data-key="CO" 标识选项
      *
-     * @param {string} dialCode - 国家拨号代码（如 '44'）
-     * @param {string} countryHint - 国家名称提示（如 '英国'）
-     * @param {string} countryIso - 国家 ISO 代码（如 'GB'），用于 React Aria Select
+     * @param {string} dialCode - 国家拨号代码（如 '57'）
+     * @param {string} countryHint - 国家名称提示（如 '哥伦比亚'）
+     * @param {string} countryIso - 国家 ISO 代码（如 'CO'），用于 React Aria Select
      */
     async selectCountry(dialCode, countryHint = '', countryIso = '') {
         console.log(`[Browser] 选择国家代码 +${dialCode}...`);

@@ -141,7 +141,7 @@ module.exports = {
     // HeroSMS
     heroSmsApiKey: config.heroSmsApiKey,
     heroSmsService: config.heroSmsService || 'dr',
-    heroSmsCountry: parseInt(config.heroSmsCountry, 10) || 73,
+    heroSmsCountry: parseInt(config.heroSmsCountry, 10) || 33,
     heroSmsPromptCountrySelection: parseBoolean(config.heroSmsPromptCountrySelection, true),
     heroSmsCountryTopN: parseInt(config.heroSmsCountryTopN, 10) || 10,
     heroSmsMaxPrice: parseOptionalNumber(config.heroSmsMaxPrice),
@@ -181,6 +181,6 @@ module.exports = {
     browserClearChatGptSession: parseBoolean(config.browserClearChatGptSession, false),
 
     // 手机国家
-    phoneCountryCode: String(config.phoneCountryCode || 'BR').trim().toUpperCase(),
+    phoneCountryCode: String(config.phoneCountryCode || 'CO').trim().toUpperCase(),
     phoneCountries,
 };

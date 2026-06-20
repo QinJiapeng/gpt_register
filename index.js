@@ -332,11 +332,11 @@ function getDefaultPhoneCountry() {
     if (byHeroSmsCountry) return byHeroSmsCountry;
 
     return getConfiguredPhoneCountries()[0] || {
-        isoCode: 'BR',
-        dialCode: '55',
-        name: '巴西',
+        isoCode: 'CO',
+        dialCode: '57',
+        name: '哥伦比亚',
         aliases: [],
-        heroSmsCountry: Number(config.heroSmsCountry) || 73,
+        heroSmsCountry: Number(config.heroSmsCountry) || 33,
     };
 }
 
@@ -531,7 +531,7 @@ async function resolveRunPhoneCountry(options = {}) {
         console.warn('[SMS] 没有可用于 HeroSMS 的国家列表，使用默认国家');
         return {
             ...defaultCountry,
-            heroSmsCountry: Number(defaultCountry.heroSmsCountry) || Number(config.heroSmsCountry) || 73,
+            heroSmsCountry: Number(defaultCountry.heroSmsCountry) || Number(config.heroSmsCountry) || 33,
         };
     }
 
@@ -645,7 +645,7 @@ async function resolveRunPhoneCountry(options = {}) {
         console.warn(`[SMS] 获取 HeroSMS 价格失败，回退到默认国家: ${error.message}`);
         return {
             ...defaultCountry,
-            heroSmsCountry: Number(defaultCountry.heroSmsCountry) || Number(config.heroSmsCountry) || 73,
+            heroSmsCountry: Number(defaultCountry.heroSmsCountry) || Number(config.heroSmsCountry) || 33,
         };
     }
 }
