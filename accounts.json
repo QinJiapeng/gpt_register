@@ -479,5 +479,21 @@
     "smsOperator": "",
     "createdAt": "2026-06-13T23:42:35.731Z",
     "status": "oauth_done"
+  },
+  {
+    "phone": "+573123861913",
+    "password": "Ko4m$$Gy8PRk4ZcBA1!",
+    "name": "Melie Cranne",
+    "birthDate": "1992-11-10",
+    "phoneCountryCode": "CO",
+    "phoneCountryDialCode": "57",
+    "phoneCountryName": "哥伦比亚",
+    "heroSmsCountry": 33,
+    "smsBowerCountry": null,
+    "smsProvider": "herosms",
+    "smsCountry": 33,
+    "smsOperator": "",
+    "createdAt": "2026-06-21T02:25:35.155Z",
+    "status": "registered"
   }
 ]

@@ -136,8 +136,16 @@ const phoneCountries = normalizePhoneCountries(
         : DEFAULT_PHONE_COUNTRIES
 );
 const mailDomains = normalizeMailDomains(config.mailDomains, config.mailDomain);
+const smsProvider = String(
+    process.env.SMS_PROVIDER
+    || config.smsProvider
+    || (config.smsBowerApiKey || config.smsbowerApiKey || process.env.SMSBOWER_API_KEY || process.env.SMS_BOWER_API_KEY ? 'smsbower' : 'herosms')
+).trim().toLowerCase();
 
 module.exports = {
+    // SMS 平台
+    smsProvider: smsProvider === 'smsbower' ? 'smsbower' : 'herosms',
+
     // HeroSMS
     heroSmsApiKey: config.heroSmsApiKey,
     heroSmsService: config.heroSmsService || 'dr',
@@ -145,6 +153,18 @@ module.exports = {
     heroSmsPromptCountrySelection: parseBoolean(config.heroSmsPromptCountrySelection, true),
     heroSmsCountryTopN: parseInt(config.heroSmsCountryTopN, 10) || 10,
     heroSmsMaxPrice: parseOptionalNumber(config.heroSmsMaxPrice),
+
+    // SMSBower
+    smsBowerApiKey: process.env.SMSBOWER_API_KEY || process.env.SMS_BOWER_API_KEY || config.smsBowerApiKey || config.smsbowerApiKey || '',
+    smsBowerBaseUrl: config.smsBowerBaseUrl || config.smsbowerBaseUrl || 'https://smsbower.page/stubs/handler_api.php',
+    smsBowerService: config.smsBowerService || config.smsbowerService || 'dr',
+    smsBowerCountry: parseInt(config.smsBowerCountry || config.smsbowerCountry, 10) || 73,
+    smsBowerPromptCountrySelection: parseBoolean(
+        config.smsBowerPromptCountrySelection ?? config.smsbowerPromptCountrySelection,
+        parseBoolean(config.heroSmsPromptCountrySelection, true)
+    ),
+    smsBowerCountryTopN: parseInt(config.smsBowerCountryTopN || config.smsbowerCountryTopN, 10) || parseInt(config.heroSmsCountryTopN, 10) || 10,
+    smsBowerMaxPrice: parseOptionalNumber(config.smsBowerMaxPrice ?? config.smsbowerMaxPrice ?? config.heroSmsMaxPrice),
 
     // Cloudflare 临时邮箱
     mailBaseUrl: config.mailBaseUrl || '',

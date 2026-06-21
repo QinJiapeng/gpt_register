@@ -1,10 +1,18 @@
 {
+  "smsProvider": "herosms",
   "heroSmsApiKey": "YOUR_HEROSMS_API_KEY",
   "heroSmsService": "dr",
   "heroSmsCountry": 33,
   "heroSmsPromptCountrySelection": true,
   "heroSmsCountryTopN": 10,
   "heroSmsMaxPrice": 0.05,
+  "smsBowerApiKey": "YOUR_SMSBOWER_API_KEY",
+  "smsBowerService": "dr",
+  "smsBowerCountry": 73,
+  "smsBowerPromptCountrySelection": true,
+  "smsBowerCountryTopN": 10,
+  "smsBowerMaxPrice": 0.05,
+  "smsBowerBaseUrl": "https://smsbower.page/stubs/handler_api.php",
   "phoneCountryCode": "CO",
   "phoneCountries": [
     { "isoCode": "GB", "dialCode": "44", "name": "英国" },

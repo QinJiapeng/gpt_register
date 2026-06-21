@@ -7,7 +7,7 @@
 ## Features
 
 - 使用 `puppeteer-real-browser` 启动本地浏览器自动化流程
-- 使用 HeroSMS 获取手机号、轮询短信验证码并结束激活
+- 使用 HeroSMS 或 SMSBower 获取手机号、轮询短信验证码并结束激活
 - 支持按国家价格排序选择手机号国家
 - 支持 `cloud-mail`、`legacy` 和 `cloudflare-worker` 邮箱接口
 - 支持 Cloudflare Email Routing + Worker + D1 作为临时邮箱后端
@@ -18,7 +18,7 @@
 ## Requirements
 
 - Node.js 18 或更高版本
-- 可用的 HeroSMS API Key
+- 可用的 HeroSMS 或 SMSBower API Key
 - 可用的临时邮箱服务
 - 可启动图形浏览器的运行环境
 
@@ -61,6 +61,7 @@ CONFIG_FILE=./config.server.json node index.js 1
 
 ```json
 {
+  "smsProvider": "herosms",
   "heroSmsApiKey": "YOUR_HEROSMS_API_KEY",
   "heroSmsService": "dr",
   "heroSmsCountry": 46,
@@ -83,11 +84,19 @@ CONFIG_FILE=./config.server.json node index.js 1
 
 | 字段 | 说明 |
 | --- | --- |
+| `smsProvider` | 短信平台：`herosms` 或 `smsbower`，默认 `herosms` |
 | `heroSmsApiKey` | HeroSMS API Key |
 | `heroSmsService` | HeroSMS 服务代码，默认 `dr` |
 | `heroSmsCountry` | HeroSMS 国家 ID，作为默认或兜底国家 |
 | `heroSmsPromptCountrySelection` | 启动时是否交互选择低价国家 |
 | `heroSmsCountryTopN` | 展示低价国家数量 |
+| `smsBowerApiKey` | SMSBower API Key |
+| `smsBowerService` | SMSBower 服务代码，默认 `dr` |
+| `smsBowerCountry` | SMSBower 国家 ID，作为默认或兜底国家 |
+| `smsBowerPromptCountrySelection` | 使用 SMSBower 时是否交互选择低价国家 |
+| `smsBowerCountryTopN` | 使用 SMSBower 时展示低价国家数量 |
+| `smsBowerMaxPrice` | 使用 SMSBower 时的最高接码价格；`0` 或不填表示不限制 |
+| `smsBowerBaseUrl` | SMSBower API 地址，默认 `https://smsbower.page/stubs/handler_api.php` |
 | `phoneCountryCode` | 手机国家 ISO 代码，例如 `SE`、`US`、`GB` |
 | `phoneCountries` | 自定义国家清单，不填时使用内置清单 |
 | `mailProvider` | 邮箱接口类型：`cloud-mail`、`legacy`、`cloudflare-worker`、`auto` |
@@ -106,6 +115,19 @@ CONFIG_FILE=./config.server.json node index.js 1
 | `browserClearChatGptSession` | 启动时是否清理 ChatGPT 登录状态 |
 
 代理也可以通过 `HTTP_PROXY`、`HTTPS_PROXY` 或 `ALL_PROXY` 环境变量提供。
+
+使用 SMSBower 时，短信平台配置可以这样写：
+
+```json
+{
+  "smsProvider": "smsbower",
+  "smsBowerApiKey": "YOUR_SMSBOWER_API_KEY",
+  "smsBowerService": "dr",
+  "smsBowerCountry": 73,
+  "smsBowerMaxPrice": 0.05,
+  "phoneCountryCode": "US"
+}
+```
 
 ## Cloudflare Email Worker
 

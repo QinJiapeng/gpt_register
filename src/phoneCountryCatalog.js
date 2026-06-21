@@ -65,6 +65,12 @@ function normalizePhoneCountries(list = []) {
             const heroSmsCountry = hasHeroSmsCountry && Number.isFinite(Number(item.heroSmsCountry))
                 ? Number(item.heroSmsCountry)
                 : null;
+            const hasSmsBowerCountry = item.smsBowerCountry !== undefined
+                && item.smsBowerCountry !== null
+                && String(item.smsBowerCountry).trim() !== '';
+            const smsBowerCountry = hasSmsBowerCountry && Number.isFinite(Number(item.smsBowerCountry))
+                ? Number(item.smsBowerCountry)
+                : null;
 
             if (!isoCode || !dialCode || !name) {
                 return null;
@@ -76,6 +82,7 @@ function normalizePhoneCountries(list = []) {
                 name,
                 aliases,
                 heroSmsCountry,
+                smsBowerCountry,
             };
         })
         .filter(Boolean);

@@ -3,7 +3,7 @@ const fs = require('fs');
 const readline = require('readline/promises');
 const { randomInt } = require('node:crypto');
 const { initRunLogger } = require('./src/runLogger');
-const { SMSProvider } = require('./src/smsProvider');
+const { SMSProvider, SMSBowerProvider } = require('./src/smsProvider');
 const { MailProvider } = require('./src/mailProvider');
 const { BrowserService } = require('./src/browserService');
 const { OAuthService } = require('./src/oauthService');
@@ -35,6 +35,72 @@ const MAIL_PROVIDER = String(config.mailProvider || '').toLowerCase();
 const TOKEN_AUTH_MAIL_PROVIDERS = new Set(['cloud-mail', 'cloudflare-worker']);
 let SELECTED_PHONE_COUNTRY = null;
 const BATCH_FAILURES = [];
+
+function buildSmsPlatformConfig() {
+    const provider = String(config.smsProvider || 'herosms').trim().toLowerCase() === 'smsbower'
+        ? 'smsbower'
+        : 'herosms';
+    if (provider === 'smsbower') {
+        return {
+            provider,
+            label: 'SMSBower',
+            apiKey: config.smsBowerApiKey,
+            baseUrl: config.smsBowerBaseUrl,
+            service: config.smsBowerService || 'dr',
+            country: Number(config.smsBowerCountry) || 73,
+            countryKey: 'smsBowerCountry',
+            promptCountrySelection: config.smsBowerPromptCountrySelection,
+            countryTopN: Number(config.smsBowerCountryTopN) || 10,
+            maxPrice: Number(config.smsBowerMaxPrice),
+        };
+    }
+    return {
+        provider,
+        label: 'HeroSMS',
+        apiKey: config.heroSmsApiKey,
+        service: config.heroSmsService || 'dr',
+        country: Number(config.heroSmsCountry) || 33,
+        countryKey: 'heroSmsCountry',
+        promptCountrySelection: config.heroSmsPromptCountrySelection,
+        countryTopN: Number(config.heroSmsCountryTopN) || 10,
+        maxPrice: Number(config.heroSmsMaxPrice),
+    };
+}
+
+const SMS_PLATFORM = buildSmsPlatformConfig();
+
+function createSmsProvider() {
+    if (SMS_PLATFORM.provider === 'smsbower') {
+        return new SMSBowerProvider(SMS_PLATFORM.apiKey, { baseUrl: SMS_PLATFORM.baseUrl });
+    }
+    return new SMSProvider(SMS_PLATFORM.apiKey);
+}
+
+function getCountryProviderId(country = {}) {
+    const direct = Number(country?.[SMS_PLATFORM.countryKey]);
+    if (Number.isFinite(direct) && direct > 0) return direct;
+    const generic = Number(country?.smsCountry);
+    if (Number.isFinite(generic) && generic > 0) return generic;
+    if (SMS_PLATFORM.countryKey === 'heroSmsCountry') {
+        const legacy = Number(country?.heroSmsCountry);
+        if (Number.isFinite(legacy) && legacy > 0) return legacy;
+    }
+    return null;
+}
+
+function withProviderCountryId(country = {}, id = null) {
+    const numericId = Number(id);
+    const resolvedId = Number.isFinite(numericId) && numericId > 0 ? numericId : null;
+    return {
+        ...country,
+        smsProvider: SMS_PLATFORM.provider,
+        smsCountry: resolvedId,
+        [SMS_PLATFORM.countryKey]: resolvedId,
+        heroSmsCountry: SMS_PLATFORM.countryKey === 'heroSmsCountry'
+            ? resolvedId
+            : (country.heroSmsCountry || null),
+    };
+}
 
 async function uploadSavedTokenFiles(tokenData, label = 'Token') {
     const savedPaths = Array.isArray(tokenData?.savedPaths) ? tokenData.savedPaths : [];
@@ -328,16 +394,15 @@ function getDefaultPhoneCountry() {
     const byArg = findConfiguredCountryByCode(COUNTRY_ARG);
     if (byArg) return byArg;
 
-    const byHeroSmsCountry = getConfiguredPhoneCountries().find(item => Number(item.heroSmsCountry) === Number(config.heroSmsCountry));
-    if (byHeroSmsCountry) return byHeroSmsCountry;
+    const bySmsCountry = getConfiguredPhoneCountries().find(item => Number(getCountryProviderId(item)) === Number(SMS_PLATFORM.country));
+    if (bySmsCountry) return bySmsCountry;
 
-    return getConfiguredPhoneCountries()[0] || {
+    return withProviderCountryId(getConfiguredPhoneCountries()[0] || {
         isoCode: 'CO',
         dialCode: '57',
         name: '哥伦比亚',
         aliases: [],
-        heroSmsCountry: Number(config.heroSmsCountry) || 33,
-    };
+    }, SMS_PLATFORM.country);
 }
 
 function resolvePhoneCountryForPhone(phone, fallback = null) {
@@ -357,6 +422,9 @@ function resolvePhoneCountryForPhone(phone, fallback = null) {
             name: fallback.name || fallback.phoneCountryName || '',
             aliases: Array.isArray(fallback.aliases) ? fallback.aliases : [],
             heroSmsCountry: fallback.heroSmsCountry || null,
+            smsBowerCountry: fallback.smsBowerCountry || null,
+            smsCountry: fallback.smsCountry || null,
+            smsProvider: fallback.smsProvider || '',
         };
     }
 
@@ -371,15 +439,15 @@ function buildCountryNameSet(country = {}) {
 }
 
 function enrichConfiguredCountryWithApiMeta(country, apiCountry = {}) {
-    return {
+    const countryId = hasNumericValue(country[SMS_PLATFORM.countryKey])
+        ? Number(country[SMS_PLATFORM.countryKey])
+        : Number(apiCountry.smsCountry ?? apiCountry.heroSmsCountry);
+    return withProviderCountryId({
         ...country,
-        heroSmsCountry: hasNumericValue(country.heroSmsCountry)
-            ? Number(country.heroSmsCountry)
-            : Number(apiCountry.heroSmsCountry),
         apiName: apiCountry.apiName || '',
         apiIsoCode: apiCountry.isoCode || '',
         apiDialCode: apiCountry.dialCode || '',
-    };
+    }, countryId);
 }
 
 function buildCountryFromApiOnly(apiCountry = {}) {
@@ -387,16 +455,15 @@ function buildCountryFromApiOnly(apiCountry = {}) {
     const dialCode = String(apiCountry.dialCode || '').replace(/^\+/, '').trim();
     const name = String(apiCountry.apiName || '').trim();
     if (!isoCode || !dialCode || !name) return null;
-    return {
+    return withProviderCountryId({
         isoCode,
         dialCode,
         name,
         aliases: [],
-        heroSmsCountry: Number(apiCountry.heroSmsCountry),
         apiName: apiCountry.apiName || '',
         apiIsoCode: apiCountry.isoCode || '',
         apiDialCode: apiCountry.dialCode || '',
-    };
+    }, Number(apiCountry.smsCountry ?? apiCountry.heroSmsCountry));
 }
 
 function matchApiCountryToConfiguredCountry(apiCountry, configuredCountries) {
@@ -419,7 +486,10 @@ function matchApiCountryToConfiguredCountry(apiCountry, configuredCountries) {
 
     for (const configured of configuredCountries) {
         const names = [...buildCountryNameSet(configured)];
-        if (apiName && names.some(name => apiName.includes(name) || name.includes(apiName))) {
+        if (apiName && names.some((name) => {
+            const minLength = Math.min(apiName.length, name.length);
+            return minLength > 5 && (apiName.includes(name) || name.includes(apiName));
+        })) {
             return configured;
         }
     }
@@ -427,24 +497,24 @@ function matchApiCountryToConfiguredCountry(apiCountry, configuredCountries) {
     return null;
 }
 
-function printCountryPriceTable(rows, title = '[SMS] HeroSMS 最便宜国家 Top 列表') {
+function printCountryPriceTable(rows, title = `[SMS] ${SMS_PLATFORM.label} 最便宜国家 Top 列表`) {
     console.log(`\n${title}`);
-    console.log('序号 | ISO | 国家 | 区号 | HeroSMS | 价格($) | 库存');
+    console.log(`序号 | ISO | 国家 | 区号 | ${SMS_PLATFORM.label} | 价格($) | 库存`);
     console.log('---- | --- | ---- | ---- | ------- | ------- | ----');
     rows.forEach((row, index) => {
         const price = Number.isFinite(Number(row.price)) ? Number(row.price).toFixed(3) : '-';
         const stock = Number.isFinite(Number(row.count)) ? String(row.count) : '-';
-        console.log(`${String(index + 1).padEnd(4)} | ${row.isoCode.padEnd(3)} | ${row.name.padEnd(10)} | +${String(row.dialCode).padEnd(4)} | ${String(row.heroSmsCountry).padEnd(7)} | ${price.padEnd(7)} | ${stock}`);
+        console.log(`${String(index + 1).padEnd(4)} | ${row.isoCode.padEnd(3)} | ${row.name.padEnd(10)} | +${String(row.dialCode).padEnd(4)} | ${String(getCountryProviderId(row)).padEnd(7)} | ${price.padEnd(7)} | ${stock}`);
     });
 }
 
-function getHeroSmsMaxPrice() {
-    const maxPrice = Number(config.heroSmsMaxPrice);
+function getSmsMaxPrice() {
+    const maxPrice = Number(SMS_PLATFORM.maxPrice);
     return Number.isFinite(maxPrice) && maxPrice > 0 ? maxPrice : null;
 }
 
-function applyHeroSmsMaxPrice(rows) {
-    const maxPrice = getHeroSmsMaxPrice();
+function applySmsMaxPrice(rows) {
+    const maxPrice = getSmsMaxPrice();
     if (maxPrice === null) return rows;
 
     const filtered = rows.filter((row) => {
@@ -471,7 +541,7 @@ async function promptUserToChooseCountry(rows, defaultCountry) {
 
     try {
         while (true) {
-            const answer = (await rl.question(`请选择国家（输入序号 / ISO / HeroSMS 国家ID，直接回车默认 ${defaultCountry.isoCode}）: `)).trim();
+            const answer = (await rl.question(`请选择国家（输入序号 / ISO / ${SMS_PLATFORM.label} 国家ID，直接回车默认 ${defaultCountry.isoCode}）: `)).trim();
             if (!answer) return defaultCountry;
 
             const byIndex = rows[Number.parseInt(answer, 10) - 1];
@@ -480,8 +550,8 @@ async function promptUserToChooseCountry(rows, defaultCountry) {
             const byCode = rows.find(item => item.isoCode === answer.toUpperCase());
             if (byCode) return byCode;
 
-            const byHeroSmsCountry = rows.find(item => String(item.heroSmsCountry) === answer);
-            if (byHeroSmsCountry) return byHeroSmsCountry;
+            const bySmsCountry = rows.find(item => String(getCountryProviderId(item)) === answer);
+            if (bySmsCountry) return bySmsCountry;
 
             console.log('[SMS] 选择无效，请重新输入。');
         }
@@ -494,13 +564,14 @@ async function resolveRunPhoneCountry(options = {}) {
     const { debug = false } = options;
     const configuredCountries = getConfiguredPhoneCountries();
     const defaultCountry = getDefaultPhoneCountry();
-    const smsProvider = new SMSProvider(config.heroSmsApiKey);
+    const smsProvider = createSmsProvider();
     const forcedCountry = config.phoneCountryCode
         ? null
         : findConfiguredCountryByCode(COUNTRY_ARG);
 
     let countriesForPricing = configuredCountries
-        .filter(item => hasNumericValue(item.heroSmsCountry));
+        .filter(item => hasNumericValue(getCountryProviderId(item)))
+        .map(item => withProviderCountryId(item, getCountryProviderId(item)));
 
     if (countriesForPricing.length < Math.min(10, configuredCountries.length)) {
         try {
@@ -528,24 +599,48 @@ async function resolveRunPhoneCountry(options = {}) {
     }
 
     if (countriesForPricing.length === 0) {
-        console.warn('[SMS] 没有可用于 HeroSMS 的国家列表，使用默认国家');
-        return {
-            ...defaultCountry,
-            heroSmsCountry: Number(defaultCountry.heroSmsCountry) || Number(config.heroSmsCountry) || 33,
-        };
+        console.warn(`[SMS] 没有可用于 ${SMS_PLATFORM.label} 的国家列表，使用默认国家`);
+        return withProviderCountryId(defaultCountry, getCountryProviderId(defaultCountry) || SMS_PLATFORM.country);
+    }
+
+    if (SMS_PLATFORM.promptCountrySelection === false) {
+        const configuredDefault = countriesForPricing.find(item => item.isoCode === defaultCountry.isoCode)
+            || withProviderCountryId(defaultCountry, getCountryProviderId(defaultCountry) || SMS_PLATFORM.country);
+        try {
+            const pricedDefault = (await smsProvider.listCountryPrices(SMS_PLATFORM.service, [configuredDefault]))[0] || null;
+            if (pricedDefault) {
+                const maxPrice = getSmsMaxPrice();
+                const price = Number(pricedDefault.price);
+                if (maxPrice !== null && (!Number.isFinite(price) || price <= 0 || price > maxPrice)) {
+                    throw new Error(`${configuredDefault.name} 当前价格 $${price.toFixed(3)} 高于上限 $${maxPrice.toFixed(3)}`);
+                }
+                console.log(`[SMS] 已关闭交互选择，强制使用配置国家: ${pricedDefault.name} (+${pricedDefault.dialCode})，${SMS_PLATFORM.label} 国家ID=${getCountryProviderId(pricedDefault)}，价格 $${price.toFixed(3)}`);
+                return pricedDefault;
+            }
+            console.warn(`[SMS] 未获取到 ${configuredDefault.name} 的价格，仍按配置国家继续`);
+            return configuredDefault;
+        } catch (error) {
+            const maxPrice = getSmsMaxPrice();
+            if (maxPrice !== null) {
+                throw new Error(`配置国家 ${configuredDefault.name} 不满足价格限制: ${error.message}`);
+            }
+            console.warn(`[SMS] 获取配置国家价格失败，仍按配置国家继续: ${error.message}`);
+            return configuredDefault;
+        }
     }
 
     try {
-        const topCountries = await smsProvider.getTopCountriesByService(config.heroSmsService);
+        const topCountries = await smsProvider.getTopCountriesByService(SMS_PLATFORM.service);
         if (debug) {
             console.log(`[SMS][Debug] topCountries count=${topCountries.length}`);
             console.log(`[SMS][Debug] topCountries sample=${JSON.stringify(topCountries.slice(0, 15))}`);
         }
         if (topCountries.length > 0) {
-            const byId = new Map(countriesForPricing.map(item => [Number(item.heroSmsCountry), item]));
-            const rankedCountries = applyHeroSmsMaxPrice(topCountries
+            const byId = new Map(countriesForPricing.map(item => [Number(getCountryProviderId(item)), item]));
+            const rankedCountries = applySmsMaxPrice(topCountries
                 .map((item) => {
-                    let base = byId.get(Number(item.heroSmsCountry));
+                    const apiCountryId = Number(item.smsCountry ?? item.heroSmsCountry);
+                    let base = byId.get(apiCountryId);
                     if (!base) {
                         const matchedConfigured = matchApiCountryToConfiguredCountry(item, configuredCountries);
                         if (matchedConfigured) {
@@ -566,7 +661,7 @@ async function resolveRunPhoneCountry(options = {}) {
             console.log(`[SMS] Top Countries 返回 ${topCountries.length} 条，成功映射 ${rankedCountries.length} 条`);
 
             if (rankedCountries.length > 0) {
-                const topN = Math.max(1, Number(config.heroSmsCountryTopN) || 5);
+                const topN = Math.max(1, Number(SMS_PLATFORM.countryTopN) || 5);
                 const topRows = rankedCountries.slice(0, topN);
                 printCountryPriceTable(topRows);
 
@@ -580,18 +675,18 @@ async function resolveRunPhoneCountry(options = {}) {
                 }
 
                 const defaultPricedCountry = rankedCountries.find(item => item.isoCode === defaultCountry.isoCode) || topRows[0];
-                if (config.heroSmsPromptCountrySelection === false) {
+                if (SMS_PLATFORM.promptCountrySelection === false) {
                     console.log(`[SMS] 已关闭交互选择，自动使用: ${defaultPricedCountry.name} (+${defaultPricedCountry.dialCode})`);
                     return defaultPricedCountry;
                 }
 
                 const selected = await promptUserToChooseCountry(topRows, defaultPricedCountry);
-                console.log(`[SMS] 已选择国家: ${selected.name} (+${selected.dialCode})，HeroSMS 国家ID=${selected.heroSmsCountry}，价格 $${selected.price.toFixed(3)}`);
+                console.log(`[SMS] 已选择国家: ${selected.name} (+${selected.dialCode})，${SMS_PLATFORM.label} 国家ID=${getCountryProviderId(selected)}，价格 $${selected.price.toFixed(3)}`);
                 return selected;
             }
 
             const debugIds = topCountries.slice(0, 10).map(item => ({
-                heroSmsCountry: item.heroSmsCountry,
+                smsCountry: item.smsCountry ?? item.heroSmsCountry,
                 apiName: item.apiName || '',
                 isoCode: item.isoCode || '',
                 dialCode: item.dialCode || '',
@@ -604,8 +699,8 @@ async function resolveRunPhoneCountry(options = {}) {
     }
 
     try {
-        const pricedCountries = applyHeroSmsMaxPrice(
-            await smsProvider.listCountryPrices(config.heroSmsService, countriesForPricing)
+        const pricedCountries = applySmsMaxPrice(
+            await smsProvider.listCountryPrices(SMS_PLATFORM.service, countriesForPricing)
         );
         if (debug) {
             console.log(`[SMS][Debug] pricedCountries count=${pricedCountries.length}`);
@@ -615,7 +710,7 @@ async function resolveRunPhoneCountry(options = {}) {
             throw new Error('价格列表为空');
         }
 
-        const topN = Math.max(1, Number(config.heroSmsCountryTopN) || 5);
+        const topN = Math.max(1, Number(SMS_PLATFORM.countryTopN) || 5);
         const topRows = pricedCountries.slice(0, topN);
         printCountryPriceTable(topRows);
 
@@ -629,32 +724,29 @@ async function resolveRunPhoneCountry(options = {}) {
         }
 
         const defaultPricedCountry = pricedCountries.find(item => item.isoCode === defaultCountry.isoCode) || topRows[0];
-        if (config.heroSmsPromptCountrySelection === false) {
+        if (SMS_PLATFORM.promptCountrySelection === false) {
             console.log(`[SMS] 已关闭交互选择，自动使用: ${defaultPricedCountry.name} (+${defaultPricedCountry.dialCode})`);
             return defaultPricedCountry;
         }
 
         const selected = await promptUserToChooseCountry(topRows, defaultPricedCountry);
-        console.log(`[SMS] 已选择国家: ${selected.name} (+${selected.dialCode})，HeroSMS 国家ID=${selected.heroSmsCountry}，价格 $${selected.price.toFixed(3)}`);
+        console.log(`[SMS] 已选择国家: ${selected.name} (+${selected.dialCode})，${SMS_PLATFORM.label} 国家ID=${getCountryProviderId(selected)}，价格 $${selected.price.toFixed(3)}`);
         return selected;
     } catch (error) {
-        const maxPrice = getHeroSmsMaxPrice();
+        const maxPrice = getSmsMaxPrice();
         if (maxPrice !== null) {
-            throw new Error(`获取 HeroSMS 价格失败，无法保证最高价格 $${maxPrice.toFixed(3)}: ${error.message}`);
+            throw new Error(`获取 ${SMS_PLATFORM.label} 价格失败，无法保证最高价格 $${maxPrice.toFixed(3)}: ${error.message}`);
         }
-        console.warn(`[SMS] 获取 HeroSMS 价格失败，回退到默认国家: ${error.message}`);
-        return {
-            ...defaultCountry,
-            heroSmsCountry: Number(defaultCountry.heroSmsCountry) || Number(config.heroSmsCountry) || 33,
-        };
+        console.warn(`[SMS] 获取 ${SMS_PLATFORM.label} 价格失败，回退到默认国家: ${error.message}`);
+        return withProviderCountryId(defaultCountry, getCountryProviderId(defaultCountry) || SMS_PLATFORM.country);
     }
 }
 
 async function runSmsCountryDebug() {
-    console.log('[测试] 仅测试 HeroSMS 国家/价格解析');
-    console.log(`[测试] service=${config.heroSmsService}, 默认国家=${config.phoneCountryCode}, 配置国家数=${getConfiguredPhoneCountries().length}`);
+    console.log(`[测试] 仅测试 ${SMS_PLATFORM.label} 国家/价格解析`);
+    console.log(`[测试] service=${SMS_PLATFORM.service}, 默认国家=${config.phoneCountryCode}, 配置国家数=${getConfiguredPhoneCountries().length}`);
     const selected = await resolveRunPhoneCountry({ debug: true });
-    console.log(`[测试] 最终选择结果: ${selected.name} (+${selected.dialCode}), HeroSMS 国家ID=${selected.heroSmsCountry}`);
+    console.log(`[测试] 最终选择结果: ${selected.name} (+${selected.dialCode}), ${SMS_PLATFORM.label} 国家ID=${getCountryProviderId(selected)}`);
     console.log('[测试] 运营商: 任何运营商（不传 operator 参数）');
 }
 
@@ -728,6 +820,9 @@ function saveAccount(phone, password, name, birthDate, phoneCountry = null, smsO
         phoneCountryDialCode: resolvedCountry?.dialCode || '',
         phoneCountryName: resolvedCountry?.name || '',
         heroSmsCountry: resolvedCountry?.heroSmsCountry || null,
+        smsBowerCountry: resolvedCountry?.smsBowerCountry || null,
+        smsProvider: SMS_PLATFORM.provider,
+        smsCountry: getCountryProviderId(resolvedCountry),
         smsOperator: smsOperator || '',
         createdAt: new Date().toISOString(),
         status: 'registered',
@@ -910,6 +1005,9 @@ function saveUsernameFile({ email, phone, password, name, birthDate, status, pho
         phoneCountryDialCode: resolvedCountry?.dialCode || account?.phoneCountryDialCode || '',
         phoneCountryName: resolvedCountry?.name || account?.phoneCountryName || '',
         heroSmsCountry: resolvedCountry?.heroSmsCountry || account?.heroSmsCountry || null,
+        smsBowerCountry: resolvedCountry?.smsBowerCountry || account?.smsBowerCountry || null,
+        smsProvider: SMS_PLATFORM.provider,
+        smsCountry: getCountryProviderId(resolvedCountry) || account?.smsCountry || null,
         smsOperator: smsOperator || account?.smsOperator || '',
         createdAt: account?.createdAt || new Date().toISOString(),
         status: status || account?.status || 'registered',
@@ -935,8 +1033,8 @@ function saveUsernameFile({ email, phone, password, name, birthDate, status, pho
 }
 
 async function getNumberWithDefaultOperator(smsProvider, phoneCountry) {
-    const service = config.heroSmsService;
-    const countryId = Number(phoneCountry?.heroSmsCountry) || config.heroSmsCountry;
+    const service = SMS_PLATFORM.service;
+    const countryId = getCountryProviderId(phoneCountry) || SMS_PLATFORM.country;
     const maxRetries = 10;
     console.log(`[SMS] 尝试获取号码: 任何运营商（不传 operator 参数），最多重试 ${maxRetries} 次`);
     await smsProvider.getNumber(service, countryId, maxRetries);
@@ -1160,7 +1258,7 @@ async function runSingleRegistration() {
         mailDomain: selectedMailDomain,
     };
 
-    const smsProvider = new SMSProvider(config.heroSmsApiKey);
+    const smsProvider = createSmsProvider();
     const mailProvider = new MailProvider({
         baseUrl: config.mailBaseUrl,
         adminPassword: config.mailAdminPassword,
@@ -1210,6 +1308,9 @@ async function runSingleRegistration() {
                 dialCode: account.phoneCountryDialCode,
                 name: account.phoneCountryName,
                 heroSmsCountry: account.heroSmsCountry,
+                smsBowerCountry: account.smsBowerCountry,
+                smsCountry: account.smsCountry,
+                smsProvider: account.smsProvider,
             });
             SELECTED_PHONE_COUNTRY = phoneCountry;
             const userData = {
@@ -1258,7 +1359,8 @@ async function runSingleRegistration() {
         const userData = generateUserData();
         console.log(`[主程序] 用户: ${userData.fullName}, 年龄: ${userData.age}, 生日: ${userData.birthDate}`);
         const phoneCountry = SELECTED_PHONE_COUNTRY || getDefaultPhoneCountry();
-        console.log(`[SMS] 本轮使用国家: ${phoneCountry.name} (+${phoneCountry.dialCode}), HeroSMS 国家ID=${phoneCountry.heroSmsCountry}`);
+        console.log(`[SMS] 本轮使用平台: ${SMS_PLATFORM.label}`);
+        console.log(`[SMS] 本轮使用国家: ${phoneCountry.name} (+${phoneCountry.dialCode}), ${SMS_PLATFORM.label} 国家ID=${getCountryProviderId(phoneCountry)}`);
         console.log('[SMS] 本轮使用运营商: 任何运营商（不传 operator 参数）');
         Object.assign(runContext, {
             name: userData.fullName,
@@ -1583,8 +1685,9 @@ async function startBatch() {
 
     assertNotRunningWithXvfb();
 
-    if (!config.heroSmsApiKey) {
-        console.error('[错误] 未配置 heroSmsApiKey');
+    if (!SMS_PLATFORM.apiKey) {
+        const keyName = SMS_PLATFORM.provider === 'smsbower' ? 'smsBowerApiKey' : 'heroSmsApiKey';
+        console.error(`[错误] 未配置 ${keyName}`);
         process.exit(1);
     }
     if (!config.mailBaseUrl) {

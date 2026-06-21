@@ -1,9 +1,11 @@
 const axios = require('axios');
 
 class SMSProvider {
-    constructor(apiKey) {
+    constructor(apiKey, options = {}) {
         this.apiKey = apiKey;
-        this.baseUrl = 'https://hero-sms.com/stubs/handler_api.php';
+        this.providerName = options.providerName || 'HeroSMS';
+        this.baseUrl = options.baseUrl || 'https://hero-sms.com/stubs/handler_api.php';
+        this.statusAction = options.statusAction || 'getStatusV2';
         this.activationId = null;
         this.phoneNumber = null;
     }
@@ -47,6 +49,12 @@ class SMSProvider {
     parseInteger(value) {
         const num = Number.parseInt(String(value ?? '').replace(/[^0-9-]+/g, ''), 10);
         return Number.isFinite(num) ? num : null;
+    }
+
+    normalizePhone(value) {
+        const phone = String(value ?? '').trim();
+        if (!phone) return '';
+        return phone.startsWith('+') ? phone : `+${phone}`;
     }
 
     summarizePayload(data) {
@@ -140,12 +148,13 @@ class SMSProvider {
         const result = [];
         const pushCountry = (countryId, payload) => {
             if (countryId === null || countryId === undefined) return;
-            const heroSmsCountry = this.parseInteger(countryId);
-            if (!Number.isFinite(heroSmsCountry)) return;
+            const smsCountry = this.parseInteger(countryId);
+            if (!Number.isFinite(smsCountry)) return;
 
             if (typeof payload === 'string') {
                 result.push({
-                    heroSmsCountry,
+                    smsCountry,
+                    heroSmsCountry: smsCountry,
                     apiName: payload.trim(),
                 });
                 return;
@@ -166,7 +175,8 @@ class SMSProvider {
             const dialCode = String(payload.dialCode ?? payload.phoneCode ?? payload.prefix ?? '').replace(/^\+/, '').trim();
 
             result.push({
-                heroSmsCountry,
+                smsCountry,
+                heroSmsCountry: smsCountry,
                 apiName,
                 isoCode,
                 dialCode,
@@ -221,7 +231,7 @@ class SMSProvider {
         const rows = [];
         const pushRow = (item) => {
             if (!item || typeof item !== 'object') return;
-            const heroSmsCountry = this.parseInteger(
+            const smsCountry = this.parseInteger(
                 item.country ?? item.countryId ?? item.country_id ?? item.id
             );
             const price = this.parseNumber(
@@ -247,9 +257,10 @@ class SMSProvider {
                 item.dialCode ?? item.phoneCode ?? item.prefix ?? item.phone_prefix ?? ''
             ).replace(/^\+/, '').trim();
 
-            if (!Number.isFinite(heroSmsCountry) || price === null) return;
+            if (!Number.isFinite(smsCountry) || price === null) return;
             rows.push({
-                heroSmsCountry,
+                smsCountry,
+                heroSmsCountry: smsCountry,
                 price,
                 count,
                 apiName,
@@ -388,19 +399,20 @@ class SMSProvider {
             }
         }
 
-        throw lastError || new Error('未能获取 HeroSMS 价格列表');
+        throw lastError || new Error(`未能获取 ${this.providerName} 价格列表`);
     }
 
     async listCountryPrices(service = 'dr', countries = []) {
         const matrix = await this.getPriceMatrix(service);
         const priced = countries
             .map((country) => {
-                const heroSmsCountry = Number(country.heroSmsCountry);
-                if (!Number.isFinite(heroSmsCountry)) return null;
-                const parsed = this.extractCountryPrice(matrix, heroSmsCountry, service);
+                const smsCountry = Number(country.smsCountry ?? country.heroSmsCountry);
+                if (!Number.isFinite(smsCountry)) return null;
+                const parsed = this.extractCountryPrice(matrix, smsCountry, service);
                 if (!parsed || parsed.price === null) return null;
                 return {
                     ...country,
+                    smsCountry,
                     price: parsed.price,
                     count: parsed.count,
                 };
@@ -429,7 +441,7 @@ class SMSProvider {
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
             let data;
             try {
-                const params = { service, country };
+                const params = this.getNumberRequestParams(service, country);
                 data = await this.request('getNumberV2', params);
             } catch (httpErr) {
                 console.log(`[SMS] API 请求失败: ${httpErr.message}，${attempt < maxRetries ? '5秒后重试...' : '已达最大重试次数'} (${attempt}/${maxRetries})`);
@@ -437,12 +449,36 @@ class SMSProvider {
                     await new Promise(r => setTimeout(r, 5000));
                     continue;
                 }
-                throw new Error(`HeroSMS API 不可用: ${httpErr.message}`);
+                throw new Error(`${this.providerName} API 不可用: ${httpErr.message}`);
             }
 
             if (typeof data === 'string') {
-                if (data === 'NO_BALANCE') throw new Error('HeroSMS 余额不足');
-                if (data === 'BAD_KEY') throw new Error('HeroSMS API Key 无效');
+                if (data === 'BAD_ACTION') {
+                    data = await this.request('getNumber', this.getNumberRequestParams(service, country));
+                    if (typeof data !== 'string') {
+                        // Continue below with the JSON response returned by the legacy action.
+                    } else {
+                        const fallbackAccessNumber = this.parseAccessNumber(data);
+                        if (fallbackAccessNumber) {
+                            this.activationId = fallbackAccessNumber.activationId;
+                            this.phoneNumber = fallbackAccessNumber.phoneNumber;
+                            console.log(`[SMS] 获取号码: ${this.phoneNumber} (activation: ${this.activationId})`);
+                            return fallbackAccessNumber;
+                        }
+                    }
+                }
+            }
+
+            if (typeof data === 'string') {
+                const accessNumber = this.parseAccessNumber(data);
+                if (accessNumber) {
+                    this.activationId = accessNumber.activationId;
+                    this.phoneNumber = accessNumber.phoneNumber;
+                    console.log(`[SMS] 获取号码: ${this.phoneNumber} (activation: ${this.activationId})`);
+                    return accessNumber;
+                }
+                if (data === 'NO_BALANCE') throw new Error(`${this.providerName} 余额不足`);
+                if (data === 'BAD_KEY') throw new Error(`${this.providerName} API Key 无效`);
                 if (data === 'NO_NUMBERS') {
                     console.log(`[SMS] 暂无可用号码，${attempt < maxRetries ? '3秒后重试...' : '已达最大重试次数'} (${attempt}/${maxRetries})`);
                     if (attempt < maxRetries) {
@@ -456,16 +492,28 @@ class SMSProvider {
                 throw new Error(`获取号码失败: ${data}`);
             }
 
-            this.activationId = data.activationId;
-            this.phoneNumber = String(data.phoneNumber);
-
-            if (!this.phoneNumber.startsWith('+')) {
-                this.phoneNumber = `+${this.phoneNumber}`;
+            this.activationId = data.activationId ?? data.activation_id ?? data.id;
+            this.phoneNumber = this.normalizePhone(data.phoneNumber ?? data.phone_number ?? data.number);
+            if (!this.activationId || !this.phoneNumber) {
+                throw new Error(`获取号码返回格式异常: ${this.summarizePayload(data)}`);
             }
 
-            console.log(`[SMS] 获取号码: ${this.phoneNumber} (activation: ${this.activationId}, 费用: $${data.activationCost})`);
+            console.log(`[SMS] 获取号码: ${this.phoneNumber} (activation: ${this.activationId}, 费用: $${data.activationCost ?? data.cost ?? '-'})`);
             return { activationId: this.activationId, phoneNumber: this.phoneNumber };
         }
+    }
+
+    getNumberRequestParams(service, country) {
+        return { service, country };
+    }
+
+    parseAccessNumber(data) {
+        const parts = String(data || '').split(':');
+        if (parts.length < 3 || parts[0] !== 'ACCESS_NUMBER') return null;
+        const activationId = parts[1].trim();
+        const phoneNumber = this.normalizePhone(parts[2]);
+        if (!activationId || !phoneNumber) return null;
+        return { activationId, phoneNumber };
     }
 
     /**
@@ -481,10 +529,10 @@ class SMSProvider {
      * @returns {Promise<{received: boolean, code?: string}>}
      */
     async getStatus() {
-        const data = await this.request('getStatusV2', { id: this.activationId });
+        const data = await this.request(this.statusAction, { id: this.activationId });
 
         if (typeof data === 'string') {
-            if (data === 'STATUS_WAIT_CODE') return { received: false };
+            if (data === 'STATUS_WAIT_CODE' || data === 'STATUS_WAIT_RETRY' || data.startsWith('STATUS_WAIT_RETRY:')) return { received: false };
             if (data === 'STATUS_CANCEL') {
                 const err = new Error('激活已被取消');
                 err.code = 'SMS_ACTIVATION_CANCELLED';
@@ -497,9 +545,10 @@ class SMSProvider {
         }
 
         // V2 JSON 响应
-        const smsCode = data?.sms?.code;
+        const smsCode = data?.sms?.code || data?.code || data?.smsCode || data?.sms_code || data?.text || data?.smsText;
         if (smsCode && smsCode.length > 0) {
-            return { received: true, code: smsCode };
+            const extracted = String(smsCode).match(/\d{4,8}/)?.[0] || String(smsCode);
+            return { received: true, code: extracted };
         }
         return { received: false };
     }
@@ -577,4 +626,129 @@ class SMSProvider {
     }
 }
 
-module.exports = { SMSProvider };
+class SMSBowerProvider extends SMSProvider {
+    constructor(apiKey, options = {}) {
+        super(apiKey, {
+            providerName: 'SMSBower',
+            baseUrl: options.baseUrl || 'https://smsbower.page/stubs/handler_api.php',
+            statusAction: 'getStatus',
+        });
+    }
+
+    getNumberRequestParams(service, country) {
+        const params = { service, country };
+        const optionalEnvParams = {
+            SMSBOWER_MAX_PRICE: 'maxPrice',
+            SMSBOWER_MIN_PRICE: 'minPrice',
+            SMSBOWER_PROVIDER_IDS: 'providerIds',
+            SMSBOWER_EXCEPT_PROVIDER_IDS: 'exceptProviderIds',
+            SMSBOWER_PHONE_EXCEPTION: 'phoneException',
+        };
+
+        for (const [envName, paramName] of Object.entries(optionalEnvParams)) {
+            const value = String(process.env[envName] || '').trim();
+            if (value) params[paramName] = value;
+        }
+
+        return params;
+    }
+
+    async setStatusWithRetry(status, label, maxRetries = 3) {
+        const okCodes = {
+            1: 'ACCESS_READY',
+            3: 'ACCESS_RETRY_GET',
+            6: 'ACCESS_ACTIVATION',
+            8: 'ACCESS_CANCEL',
+        };
+        const retryableCodes = new Set(['EARLY_CANCEL_DENIED']);
+        const errorCodes = new Set(['NO_ACTIVATION', 'BAD_STATUS', 'BAD_KEY', 'BAD_ACTION']);
+
+        for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
+            const result = await this.request('setStatus', { id: this.activationId, status });
+            if (typeof result !== 'string') return result;
+            if (result === okCodes[status]) return result;
+
+            if (retryableCodes.has(result) && attempt < maxRetries) {
+                console.log(`[SMS] ${label}被 SMSBower 暂时拒绝: ${result}，5秒后重试... (${attempt}/${maxRetries})`);
+                await new Promise(r => setTimeout(r, 5000));
+                continue;
+            }
+
+            if (retryableCodes.has(result) || errorCodes.has(result)) {
+                throw new Error(`${label}失败: ${result}`);
+            }
+
+            return result;
+        }
+
+        throw new Error(`${label}失败: 重试耗尽`);
+    }
+
+    countryNameToSlug(value = '') {
+        return String(value || '')
+            .trim()
+            .toLowerCase()
+            .replace(/&/g, 'and')
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/^-+|-+$/g, '');
+    }
+
+    bestOfferFromProviderMatrix(matrix) {
+        if (!matrix || typeof matrix !== 'object') return null;
+        let best = null;
+        for (const offer of Object.values(matrix)) {
+            const parsed = this.extractPriceFromNode(offer);
+            if (!parsed || parsed.price === null) continue;
+            if (!best || parsed.price < best.price || (parsed.price === best.price && (parsed.count || 0) > (best.count || 0))) {
+                best = parsed;
+            }
+        }
+        return best;
+    }
+
+    async getTopCountriesByService(service = 'dr') {
+        const data = await this.request('getTopCountriesByService', { service });
+        if (!data || typeof data !== 'object' || Array.isArray(data)) {
+            return super.getTopCountriesByService(service);
+        }
+
+        const countries = await this.getCountries();
+        const bySlug = new Map();
+        for (const country of countries) {
+            const slug = this.countryNameToSlug(country.apiName);
+            if (slug) bySlug.set(slug, country);
+        }
+
+        const rows = [];
+        for (const [slug, providerMatrix] of Object.entries(data)) {
+            const offer = this.bestOfferFromProviderMatrix(providerMatrix);
+            if (!offer) continue;
+
+            const normalizedSlug = this.countryNameToSlug(slug);
+            const country = bySlug.get(normalizedSlug)
+                || (normalizedSlug.endsWith('s') ? bySlug.get(normalizedSlug.slice(0, -1)) : null);
+            if (!country) continue;
+
+            rows.push({
+                smsCountry: country.smsCountry,
+                heroSmsCountry: country.smsCountry,
+                price: offer.price,
+                count: offer.count,
+                apiName: country.apiName,
+                isoCode: country.isoCode || '',
+                dialCode: country.dialCode || '',
+            });
+        }
+
+        if (rows.length === 0) {
+            return super.getTopCountriesByService(service);
+        }
+
+        return rows.sort((a, b) => {
+            if (a.price !== b.price) return a.price - b.price;
+            return (b.count || 0) - (a.count || 0);
+        });
+    }
+}
+
+module.exports = { SMSProvider, SMSBowerProvider };
