@@ -1,5 +1,6 @@
 const axios = require('axios');
 const { randomInt } = require('node:crypto');
+const { OutlookAccountPool, OutlookMailClient } = require('./outlookMail');
 
 class MailProvider {
     constructor(options) {
@@ -7,10 +8,21 @@ class MailProvider {
         this.adminPassword = options.adminPassword;
         this.sitePassword = options.sitePassword || '';
         this.domain = options.domain;
-        this.provider = String(options.provider || 'auto').toLowerCase(); // auto | legacy | cloud-mail | cloudflare-worker
+        this.provider = String(options.provider || 'auto').toLowerCase(); // auto | legacy | cloud-mail | cloudflare-worker | outlook
         this.adminEmail = options.adminEmail || '';
         this.adminToken = options.adminToken || '';
         this.userType = Number(options.userType) || 1;
+        this.outlookPoolFile = options.outlookPoolFile || '';
+        this.outlookPoolStateFile = options.outlookPoolStateFile || '';
+        this.outlookAccounts = Array.isArray(options.outlookAccounts) ? options.outlookAccounts : [];
+        this.outlookImapHost = options.outlookImapHost || '';
+        this.outlookImapPort = Number(options.outlookImapPort) || 993;
+        this.outlookPool = null;
+        this.outlookClient = null;
+        this.outlookAccount = null;
+        this.outlookOtpThresholdTs = 0;
+        this.outlookAddressThresholds = new Map();
+        this.outlookAddressFinalized = false;
         this.jwt = null;
         this.address = null;
         this.addressId = null;
@@ -178,6 +190,23 @@ class MailProvider {
         return `${out}A1!`;
     }
 
+    _ensureOutlook() {
+        if (!this.outlookPool) {
+            this.outlookPool = new OutlookAccountPool({
+                poolFile: this.outlookPoolFile,
+                stateFile: this.outlookPoolStateFile,
+                accounts: this.outlookAccounts,
+            });
+        }
+        if (!this.outlookClient) {
+            this.outlookClient = new OutlookMailClient({
+                imapHost: this.outlookImapHost,
+                imapPort: this.outlookImapPort,
+                pool: this.outlookPool,
+            });
+        }
+    }
+
     async _ensureCloudAdminToken() {
         if (this.adminToken) return this.adminToken;
 
@@ -313,7 +342,26 @@ class MailProvider {
         return { jwt: this.jwt, address: this.address, addressId: this.addressId };
     }
 
+    async _createAddressOutlook() {
+        this._ensureOutlook();
+        const account = this.outlookPool.claimNext();
+        this.outlookAccount = account;
+        this.jwt = 'outlook-imap-oauth2';
+        this.address = account.email;
+        this.addressId = account.email;
+        this.addressPassword = account.password || null;
+        this.outlookOtpThresholdTs = Math.floor(Date.now() / 1000) - 5;
+        this.outlookAddressFinalized = false;
+        this._cacheCurrentSession();
+
+        console.log(`[Mail][outlook] 从号池取用邮箱: ${this.address}`);
+        return { jwt: this.jwt, address: this.address, addressId: this.addressId };
+    }
+
     async createAddress(name = null) {
+        if (this.provider === 'outlook') {
+            return await this._createAddressOutlook();
+        }
         if (this.provider === 'legacy') {
             return await this._createAddressLegacy(name);
         }
@@ -353,6 +401,9 @@ class MailProvider {
     }
 
     getInboxUrl() {
+        if (this.provider === 'outlook') {
+            return 'https://outlook.live.com/mail/0/inbox';
+        }
         if (this.provider === 'cloud-mail') {
             return `${this.baseUrl}/`;
         }
@@ -434,7 +485,17 @@ class MailProvider {
         return await this._getMailsByAddressCloudflareWorker(this.address, limit, offset);
     }
 
+    async _getMailsOutlook(limit = 10) {
+        if (!this.address) {
+            throw new Error('[outlook] 当前邮箱地址不存在，无法获取邮件');
+        }
+        return await this._getMailsByAddressOutlook(this.address, limit);
+    }
+
     async getMails(limit = 10, offset = 0) {
+        if (this.provider === 'outlook') {
+            return await this._getMailsOutlook(limit);
+        }
         if (this.provider === 'cloud-mail') {
             return await this._getMailsCloudMail(limit);
         }
@@ -594,7 +655,36 @@ class MailProvider {
         return this._normalizeCloudMailRows(mails);
     }
 
+    async _getMailsByAddressOutlook(address, limit = 10) {
+        const normalized = this._normalizeAddress(address);
+        if (!normalized) {
+            throw new Error('email is empty');
+        }
+        this._ensureOutlook();
+
+        let account = null;
+        if (this._normalizeAddress(this.outlookAccount?.email) === normalized) {
+            account = this.outlookAccount;
+        } else {
+            account = this.outlookPool.get(normalized);
+        }
+        if (!account) {
+            throw new Error(`[outlook] 号池中找不到邮箱凭证: ${normalized}`);
+        }
+
+        const thresholdTs = this.outlookAddressThresholds.get(normalized)
+            || (this._normalizeAddress(this.address) === normalized ? this.outlookOtpThresholdTs : 0);
+        const mails = await this.outlookClient.fetchRecentOpenAiMails(account, {
+            limit: Math.max(1, Math.min(50, Number(limit) || 10)),
+            thresholdTs,
+        });
+        return this._normalizeCloudMailRows(mails);
+    }
+
     async getMailsByAddress(address, limit = 10, offset = 0) {
+        if (this.provider === 'outlook') {
+            return await this._getMailsByAddressOutlook(address, limit);
+        }
         if (this.provider === 'cloud-mail') {
             return await this._getMailsByAddressCloudMail(address, limit);
         }
@@ -621,6 +711,33 @@ class MailProvider {
         }
 
         return await this._fetchMailsByAdmin(normalized, limit, offset);
+    }
+
+    noteOtpRequested(address = null) {
+        if (this.provider !== 'outlook') return;
+        const target = this._normalizeAddress(address || this.address);
+        if (!target) return;
+        const threshold = Math.floor(Date.now() / 1000) - 5;
+        this.outlookAddressThresholds.set(target, threshold);
+        if (target === this._normalizeAddress(this.address)) {
+            this.outlookOtpThresholdTs = threshold;
+        }
+    }
+
+    markAddressDone(reason = '') {
+        if (this.provider !== 'outlook' || !this.address || this.outlookAddressFinalized) return;
+        this._ensureOutlook();
+        this.outlookPool.markDone(this.address, reason);
+        this.outlookAddressFinalized = true;
+        console.log(`[Mail][outlook] 号池状态更新为 done: ${this.address}`);
+    }
+
+    markAddressFailed(reason = '') {
+        if (this.provider !== 'outlook' || !this.address || this.outlookAddressFinalized) return;
+        this._ensureOutlook();
+        this.outlookPool.markFailed(this.address, reason);
+        this.outlookAddressFinalized = true;
+        console.log(`[Mail][outlook] 号池状态更新为 failed: ${this.address}`);
     }
 }
 

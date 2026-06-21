@@ -1,0 +1,5 @@
+# 每行一个 Outlook 接码号，格式和 gpt-outlook-register 保持一致：
+# email----password----client_id----microsoft_refresh_token
+#
+# 示例：
+# charles123@outlook.jp----P@ssw0rd----9e5f94bc-e8a4-0000-0000-000000000000----M.C538_BAY.0.U.-Cs...

@@ -9,7 +9,7 @@
 - 使用 `puppeteer-real-browser` 启动本地浏览器自动化流程
 - 使用 HeroSMS 或 SMSBower 获取手机号、轮询短信验证码并结束激活
 - 支持按国家价格排序选择手机号国家
-- 支持 `cloud-mail`、`legacy` 和 `cloudflare-worker` 邮箱接口
+- 支持 `cloud-mail`、`legacy`、`cloudflare-worker` 和 Outlook 号池邮箱接口
 - 支持 Cloudflare Email Routing + Worker + D1 作为临时邮箱后端
 - 支持完整流程、分阶段恢复、只补 token、批量补 token
 - 支持代理、浏览器持久化 profile、运行时清理 ChatGPT 登录状态
@@ -99,13 +99,16 @@ CONFIG_FILE=./config.server.json node index.js 1
 | `smsBowerBaseUrl` | SMSBower API 地址，默认 `https://smsbower.page/stubs/handler_api.php` |
 | `phoneCountryCode` | 手机国家 ISO 代码，例如 `SE`、`US`、`GB` |
 | `phoneCountries` | 自定义国家清单，不填时使用内置清单 |
-| `mailProvider` | 邮箱接口类型：`cloud-mail`、`legacy`、`cloudflare-worker`、`auto` |
+| `mailProvider` | 邮箱接口类型：`cloud-mail`、`legacy`、`cloudflare-worker`、`outlook`、`auto` |
 | `mailBaseUrl` | 邮箱服务根地址 |
 | `mailAdminEmail` | `cloud-mail` 管理员邮箱 |
 | `mailAdminPassword` | `cloud-mail` 管理员密码或旧接口 admin key |
 | `mailAdminToken` | 邮箱接口 token；配置后优先使用 |
 | `mailDomain` | 默认邮箱域名 |
 | `mailDomains` | 邮箱域名池 |
+| `outlookPoolFile` | Outlook 号池文本文件，每行 `email----password----client_id----refresh_token` |
+| `outlookPoolStateFile` | Outlook 号池状态文件，记录 `available/in_use/done/failed` |
+| `outlookAccounts` | 可选，直接在配置里写 Outlook 四段号数组；适合少量测试 |
 | `proxyHost` / `proxyPort` | 浏览器和 OAuth 请求代理 |
 | `proxyUsername` / `proxyPassword` | 代理认证信息 |
 | `tokenOutputDir` | 单个 token 输出目录 |
@@ -115,6 +118,24 @@ CONFIG_FILE=./config.server.json node index.js 1
 | `browserClearChatGptSession` | 启动时是否清理 ChatGPT 登录状态 |
 
 代理也可以通过 `HTTP_PROXY`、`HTTPS_PROXY` 或 `ALL_PROXY` 环境变量提供。
+
+使用 Outlook 号池时，邮箱配置可以这样写：
+
+```json
+{
+  "mailProvider": "outlook",
+  "outlookPoolFile": "outlook_pool.txt",
+  "outlookPoolStateFile": "outlook_pool_state.json"
+}
+```
+
+`outlook_pool.txt` 每行一个接码号，格式与 `gpt-outlook-register` 一致：
+
+```text
+email----password----client_id----microsoft_refresh_token
+```
+
+Outlook 模式不需要 `mailBaseUrl`、`mailDomain`、`mailAdminToken`。脚本会从号池 claim 一个 `available` 邮箱，使用 Microsoft refresh_token 换 IMAP access_token，通过 XOAUTH2 扫描 `INBOX/Junk/Junk Email/Spam` 收 OpenAI 验证码。邮箱绑定成功后状态会写成 `done`；绑定前失败会写成 `failed`。`--phase3` / `--phase8` 会按 `username.json` 里的 email 从状态文件找回同一个 Outlook 凭证取码。
 
 使用 SMSBower 时，短信平台配置可以这样写：
 

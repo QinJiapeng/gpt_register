@@ -33,6 +33,7 @@ const SMS_MAX_ATTEMPTS = Math.ceil(SMS_MAX_WAIT_MS / SMS_POLL_INTERVAL); // 3 mi
 const PHASE8_ACCOUNT_DELAY_MS = 60 * 1000;
 const MAIL_PROVIDER = String(config.mailProvider || '').toLowerCase();
 const TOKEN_AUTH_MAIL_PROVIDERS = new Set(['cloud-mail', 'cloudflare-worker']);
+const OUTLOOK_MAIL_PROVIDER = MAIL_PROVIDER === 'outlook';
 let SELECTED_PHONE_COUNTRY = null;
 const BATCH_FAILURES = [];
 
@@ -264,6 +265,10 @@ function extractVerificationCodeFromBody(body = '', raw = '') {
 }
 
 async function pollEmailCode(mailProvider, maxAttempts = 30, interval = 5000) {
+    if (typeof mailProvider.noteOtpRequested === 'function') {
+        mailProvider.noteOtpRequested();
+    }
+
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         console.log(`[Mail] 轮询邮箱验证码... (${attempt}/${maxAttempts})`);
 
@@ -302,6 +307,10 @@ function extractVerificationCodeFromMail(mail = {}) {
 }
 
 async function pollEmailCodeByAddress(mailProvider, email, maxAttempts = 30, interval = 5000) {
+    if (typeof mailProvider.noteOtpRequested === 'function') {
+        mailProvider.noteOtpRequested(email);
+    }
+
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         console.log(`[Mail][Phase8] polling ${email} code... (${attempt}/${maxAttempts})`);
         try {
@@ -368,6 +377,12 @@ function getConfiguredMailDomains() {
     return Array.isArray(config.mailDomains)
         ? config.mailDomains.map(item => String(item || '').trim().replace(/^@/, '')).filter(Boolean)
         : [];
+}
+
+function hasOutlookPoolSource() {
+    return (Array.isArray(config.outlookAccounts) && config.outlookAccounts.length > 0)
+        || (config.outlookPoolFile && fs.existsSync(config.outlookPoolFile))
+        || (config.outlookPoolStateFile && fs.existsSync(config.outlookPoolStateFile));
 }
 
 function pickMailDomain() {
@@ -1178,6 +1193,11 @@ async function phase2(smsProvider, mailProvider, browserService, oauthService, u
             return await pollEmailCode(mailProvider);
         },
     });
+
+    if (typeof mailProvider.markAddressDone === 'function') {
+        mailProvider.markAddressDone('email_bound');
+    }
+
     console.log('[阶段2] 临时邮箱绑定完成');
 
     return {
@@ -1256,11 +1276,15 @@ async function runSingleRegistration() {
     console.log('\n=========================================');
     console.log('[主程序] 开始一次全新的注册与授权流程');
     console.log('=========================================');
-    const selectedMailDomain = pickMailDomain() || config.mailDomain;
-    if (!selectedMailDomain) {
+    const selectedMailDomain = OUTLOOK_MAIL_PROVIDER ? '' : (pickMailDomain() || config.mailDomain);
+    if (!OUTLOOK_MAIL_PROVIDER && !selectedMailDomain) {
         throw new Error('未配置可用邮箱域名，请填写 mailDomain 或 mailDomains');
     }
-    console.log(`[Mail] 本轮使用邮箱域名: ${selectedMailDomain}`);
+    if (OUTLOOK_MAIL_PROVIDER) {
+        console.log('[Mail] 本轮使用邮箱来源: Outlook 号池');
+    } else {
+        console.log(`[Mail] 本轮使用邮箱域名: ${selectedMailDomain}`);
+    }
     const runContext = {
         stage: 'init',
         phone: '',
@@ -1282,6 +1306,11 @@ async function runSingleRegistration() {
         adminEmail: config.mailAdminEmail,
         adminToken: config.mailAdminToken,
         userType: config.mailUserType,
+        outlookPoolFile: config.outlookPoolFile,
+        outlookPoolStateFile: config.outlookPoolStateFile,
+        outlookAccounts: config.outlookAccounts,
+        outlookImapHost: config.outlookImapHost,
+        outlookImapPort: config.outlookImapPort,
     });
     const baseProxy = config.proxyHost ? {
         host: config.proxyHost,
@@ -1449,6 +1478,9 @@ async function runSingleRegistration() {
         }
 
     } catch (error) {
+        if (typeof mailProvider.markAddressFailed === 'function') {
+            mailProvider.markAddressFailed(error.message);
+        }
         error.runContext = { ...(error.runContext || {}), ...runContext };
         console.error('[主程序] 本次任务执行失败:', error.message);
         throw error;
@@ -1475,6 +1507,11 @@ async function runPhase8ForEntry(entry, index, total) {
         adminEmail: config.mailAdminEmail,
         adminToken: config.mailAdminToken,
         userType: config.mailUserType,
+        outlookPoolFile: config.outlookPoolFile,
+        outlookPoolStateFile: config.outlookPoolStateFile,
+        outlookAccounts: config.outlookAccounts,
+        outlookImapHost: config.outlookImapHost,
+        outlookImapPort: config.outlookImapPort,
     });
 
     const baseProxy = config.proxyHost ? {
@@ -1584,10 +1621,14 @@ async function startPhase8() {
 
     assertNotRunningWithXvfb();
 
-    if (!config.mailBaseUrl || getConfiguredMailDomains().length === 0) {
+    if (!OUTLOOK_MAIL_PROVIDER && (!config.mailBaseUrl || getConfiguredMailDomains().length === 0)) {
         throw new Error('Phase8 requires mailBaseUrl and mailDomain/mailDomains in config');
     }
-    if (TOKEN_AUTH_MAIL_PROVIDERS.has(MAIL_PROVIDER)) {
+    if (OUTLOOK_MAIL_PROVIDER) {
+        if (!hasOutlookPoolSource()) {
+            throw new Error('Phase8 outlook requires outlookPoolFile/outlookPoolStateFile or outlookAccounts');
+        }
+    } else if (TOKEN_AUTH_MAIL_PROVIDERS.has(MAIL_PROVIDER)) {
         if (!config.mailAdminToken && !config.mailAdminPassword) {
             throw new Error(`Phase8 ${MAIL_PROVIDER} requires mailAdminToken or mailAdminPassword`);
         }
@@ -1633,10 +1674,14 @@ async function startPhase3Only() {
 
     assertNotRunningWithXvfb();
 
-    if (!config.mailBaseUrl || getConfiguredMailDomains().length === 0) {
+    if (!OUTLOOK_MAIL_PROVIDER && (!config.mailBaseUrl || getConfiguredMailDomains().length === 0)) {
         throw new Error('Phase3 requires mailBaseUrl and mailDomain/mailDomains in config');
     }
-    if (TOKEN_AUTH_MAIL_PROVIDERS.has(MAIL_PROVIDER)) {
+    if (OUTLOOK_MAIL_PROVIDER) {
+        if (!hasOutlookPoolSource()) {
+            throw new Error('Phase3 outlook requires outlookPoolFile/outlookPoolStateFile or outlookAccounts');
+        }
+    } else if (TOKEN_AUTH_MAIL_PROVIDERS.has(MAIL_PROVIDER)) {
         if (!config.mailAdminToken && !config.mailAdminPassword) {
             throw new Error(`Phase3 ${MAIL_PROVIDER} requires mailAdminToken or mailAdminPassword`);
         }
@@ -1704,15 +1749,20 @@ async function startBatch() {
         console.error(`[错误] 未配置 ${keyName}`);
         process.exit(1);
     }
-    if (!config.mailBaseUrl) {
+    if (!OUTLOOK_MAIL_PROVIDER && !config.mailBaseUrl) {
         console.error('[错误] 未配置 mailBaseUrl');
         process.exit(1);
     }
-    if (getConfiguredMailDomains().length === 0) {
+    if (!OUTLOOK_MAIL_PROVIDER && getConfiguredMailDomains().length === 0) {
         console.error('[错误] 未配置 mailDomain 或 mailDomains');
         process.exit(1);
     }
-    if (TOKEN_AUTH_MAIL_PROVIDERS.has(MAIL_PROVIDER)) {
+    if (OUTLOOK_MAIL_PROVIDER) {
+        if (!hasOutlookPoolSource()) {
+            console.error('[错误] Outlook 模式需要 outlookPoolFile、outlookPoolStateFile 或 outlookAccounts');
+            process.exit(1);
+        }
+    } else if (TOKEN_AUTH_MAIL_PROVIDERS.has(MAIL_PROVIDER)) {
         if (!config.mailAdminToken && !config.mailAdminPassword) {
             console.error(`[错误] ${MAIL_PROVIDER} 需要配置 mailAdminToken 或 mailAdminPassword`);
             process.exit(1);

@@ -71,6 +71,13 @@
   "mailSitePassword": "",
   "mailDomain": "your-domain.example.com",
   "mailDomains": ["your-domain.example.com", "your-other-domain.example.com"],
+  "outlookPoolFile": "outlook_pool.txt",
+  "outlookPoolStateFile": "outlook_pool_state.json",
+  "outlookAccounts": [
+    "charles123@outlook.jp----P@ssw0rd----9e5f94bc-e8a4-0000-0000-000000000000----M.C538_BAY.0.U.-Cs..."
+  ],
+  "outlookImapHost": "outlook.office365.com",
+  "outlookImapPort": 993,
   "proxyHost": "",
   "proxyPort": 0,
   "proxyUsername": "",

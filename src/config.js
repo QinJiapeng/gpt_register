@@ -120,6 +120,8 @@ function loadConfig() {
 }
 
 const config = loadConfig();
+const defaultOutlookPoolFile = path.join(rootDir, 'outlook_pool.txt');
+const defaultOutlookPoolStateFile = path.join(rootDir, 'outlook_pool_state.json');
 const envTokenOutputDirs = parsePathList(process.env.TOKEN_OUTPUT_DIRS);
 const envTokenOutputDir = String(process.env.TOKEN_OUTPUT_DIR || '').trim();
 const envProxy = parseProxyUrl(
@@ -172,10 +174,15 @@ module.exports = {
     mailSitePassword: config.mailSitePassword || '',
     mailDomain: mailDomains[0] || '',
     mailDomains,
-    mailProvider: config.mailProvider || 'cloud-mail', // cloud-mail | legacy | auto
+    mailProvider: config.mailProvider || 'cloud-mail', // cloud-mail | legacy | cloudflare-worker | outlook | auto
     mailAdminEmail: config.mailAdminEmail || '',
     mailAdminToken: config.mailAdminToken || '',
     mailUserType: parseInt(config.mailUserType, 10) || 1,
+    outlookPoolFile: resolveProjectPath(process.env.OUTLOOK_POOL_FILE || config.outlookPoolFile || defaultOutlookPoolFile),
+    outlookPoolStateFile: resolveProjectPath(config.outlookPoolStateFile || defaultOutlookPoolStateFile),
+    outlookAccounts: Array.isArray(config.outlookAccounts) ? config.outlookAccounts : [],
+    outlookImapHost: config.outlookImapHost || 'outlook.office365.com',
+    outlookImapPort: parseInt(config.outlookImapPort, 10) || 993,
 
     // 代理
     proxyHost: config.proxyHost || envProxy?.host || '',

@@ -4,6 +4,8 @@ node_modules/
 dist/
 .DS_Store
 config.agent.json
+outlook_pool.txt
+outlook_pool_state.json
 agent.lock
 logs/
 tokens/
