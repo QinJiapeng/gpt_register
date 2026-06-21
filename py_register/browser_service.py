@@ -99,7 +99,7 @@ class PatchrightBrowserService:
                         return
             except Exception:
                 pass
-            sleep(2)
+            sleep(0.5)
         raise RuntimeError("Cloudflare 验证超时")
 
     def wait_for_text(self, texts, timeout_ms: int = 30000):
@@ -109,7 +109,7 @@ class PatchrightBrowserService:
             body = self._body_text()
             if any(text in body for text in candidates):
                 return
-            sleep(1)
+            sleep(0.3)
         raise RuntimeError(f"等待文字超时: {candidates}")
 
     def wait_for_button_text(self, texts, timeout_ms: int = 30000):
@@ -121,11 +121,12 @@ class PatchrightBrowserService:
                 text = (buttons.nth(i).inner_text(timeout=500) or "").strip()
                 if any(x in text for x in candidates):
                     return
-            sleep(1)
+            sleep(0.3)
         raise RuntimeError(f"等待按钮超时: {candidates}")
 
     def click_button_by_text(self, texts, timeout_ms: int = 10000):
         candidates = texts if isinstance(texts, list) else [texts]
+        normalized_candidates = [str(item).lower() for item in candidates]
         deadline = time.time() + timeout_ms / 1000
         while time.time() < deadline:
             buttons = self.page.locator("button, [role=button], a")
@@ -133,15 +134,54 @@ class PatchrightBrowserService:
                 node = buttons.nth(i)
                 try:
                     text = (node.inner_text(timeout=500) or "").strip()
-                    if any(x in text for x in candidates):
+                    lower_text = text.lower()
+                    if any(str(x) in lower_text for x in normalized_candidates):
                         node.click(timeout=1500)
                         return
                 except Exception:
                     continue
-            sleep(0.8)
+            sleep(0.25)
         raise RuntimeError(f"找不到按钮: {candidates}")
 
+    def page_signature(self):
+        try:
+            return self.page.evaluate(
+                """() => ({
+                    url: location.href,
+                    title: document.title || '',
+                    text: (document.body?.innerText || '').slice(0, 500),
+                    buttons: Array.from(document.querySelectorAll('button')).map(b => (b.innerText || '').trim()).filter(Boolean).slice(0, 12).join('|'),
+                    inputs: Array.from(document.querySelectorAll('input:not([type="hidden"])')).map(i => `${i.type || ''}:${i.name || ''}:${i.placeholder || ''}`).join('|')
+                })"""
+            )
+        except Exception:
+            return {"url": "", "title": "", "text": "", "buttons": "", "inputs": ""}
+
+    def wait_for_page_progress(self, before=None, timeout_ms: int = 6000, min_wait_ms: int = 250):
+        if min_wait_ms > 0:
+            sleep(min_wait_ms / 1000)
+        if not before:
+            return
+        deadline = time.time() + timeout_ms / 1000
+        before_key = (before.get("url"), before.get("text"), before.get("buttons"), before.get("inputs"))
+        while time.time() < deadline:
+            try:
+                title = self.page.title()
+                url = self.page.url
+                if any(x.lower() in title.lower() for x in ["checking", "稍候", "moment"]) or "challenge" in url:
+                    sleep(0.5)
+                    continue
+            except Exception:
+                sleep(0.25)
+                continue
+            current = self.page_signature()
+            current_key = (current.get("url"), current.get("text"), current.get("buttons"), current.get("inputs"))
+            if current_key != before_key:
+                return
+            sleep(0.25)
+
     def click_submit_button(self):
+        before = self.page_signature()
         clicked = self.page.evaluate(
             """() => {
                 const labels = ['继续', 'Continue', '下一步', 'Next', '创建账号', 'Create account', 'Sign up', 'Verify', 'Submit'];
@@ -165,7 +205,7 @@ class PatchrightBrowserService:
             }"""
         )
         print(f"[Browser] 点击提交按钮: {clicked or '(unknown)'}")
-        sleep(3)
+        self.wait_for_page_progress(before, timeout_ms=3000, min_wait_ms=250)
 
     def _body_text(self) -> str:
         try:
@@ -221,21 +261,20 @@ class PatchrightBrowserService:
         )
         if result:
             print(f"[Browser] 国家选择结果: {result}")
-        sleep(1)
+        sleep(0.2)
 
     def enter_phone(self, local_number: str):
         print(f"[Browser] 输入手机号: {local_number}")
         input_box = self.page.locator('input[name="phoneNumberInput"], input[type="tel"]').first
         input_box.click(click_count=3, timeout=15000)
         input_box.type(str(local_number), delay=50)
-        sleep(0.5)
+        sleep(0.2)
         self.click_submit_button()
-        self.wait_for_cloudflare(60000)
-        sleep(3)
+        self.wait_for_cloudflare(15000)
 
     def enter_code(self, code: str):
         print(f"[Browser] 输入验证码: {code}")
-        sleep(1.5)
+        sleep(0.3)
         target = None
         inputs = self.page.locator('input:not([type="hidden"]):not([type="password"])')
         for index in range(inputs.count()):
@@ -256,7 +295,7 @@ class PatchrightBrowserService:
         except Exception:
             self.page.keyboard.press("Tab")
             self.page.keyboard.type(str(code), delay=80)
-        sleep(1)
+        sleep(0.2)
         self.click_submit_button()
 
     def fill_password(self, password: str):
@@ -264,8 +303,35 @@ class PatchrightBrowserService:
         box.click(click_count=3, timeout=10000)
         box.type(password, delay=35)
 
+    def fill_input_value(self, selector: str, value: str, label: str = "input"):
+        filled = self.page.evaluate(
+            """({selector, value}) => {
+                const inputs = Array.from(document.querySelectorAll(selector));
+                const visible = (el) => {
+                    const rect = el.getBoundingClientRect();
+                    const style = window.getComputedStyle(el);
+                    return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+                };
+                const el = inputs.find(visible) || inputs[0];
+                if (!el) return false;
+                el.scrollIntoView({block: 'center', inline: 'center'});
+                el.focus();
+                const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+                if (setter) setter.call(el, String(value)); else el.value = String(value);
+                el.dispatchEvent(new InputEvent('input', {bubbles: true, inputType: 'insertText', data: String(value)}));
+                el.dispatchEvent(new Event('change', {bubbles: true}));
+                el.dispatchEvent(new KeyboardEvent('keyup', {bubbles: true}));
+                el.blur();
+                return true;
+            }""",
+            {"selector": selector, "value": value},
+        )
+        if not filled:
+            raise RuntimeError(f"未找到可填写输入框: {selector}")
+        print(f"[Browser] 已填写 {label}")
+
     def fill_about_you_and_submit(self, full_name: str, age: int, birth_date: str, tag: str):
-        sleep(1.5)
+        sleep(0.3)
         filled = self.page.evaluate(
             """({fullName, age, birthDate}) => {
                 const [year, month, day] = String(birthDate || '1990-01-01').split('-');
@@ -390,8 +456,8 @@ class PatchrightBrowserService:
             }"""
         )
         self.click_submit_button()
-        self.wait_for_cloudflare(60000)
-        sleep(2)
+        self.wait_for_cloudflare(15000)
+        sleep(0.3)
 
     @staticmethod
     def is_choose_account_page(info: dict) -> bool:
@@ -484,10 +550,10 @@ class PatchrightBrowserService:
             self.screenshot("choose-account-not-found.png")
             raise RuntimeError("choose-an-account 页面未找到可点击账号卡片")
         print(f"{tag} 选择已有账号: {result.get('text')}")
+        before = self.page_signature()
         self.page.mouse.click(result["x"], result["y"])
-        sleep(3)
-        self.wait_for_cloudflare(30000)
-        sleep(2)
+        self.wait_for_page_progress(before, timeout_ms=8000, min_wait_ms=250)
+        self.wait_for_cloudflare(15000)
 
     def navigate_to_signup(self):
         if self.config.get("browserClearChatGptSession"):
@@ -496,7 +562,7 @@ class PatchrightBrowserService:
         self.page.goto("https://chatgpt.com", wait_until="domcontentloaded", timeout=60000)
         self.wait_for_cloudflare()
         self.wait_for_button_text(["免费注册", "Sign up for free", "Sign up"], 30000)
-        sleep(4)
+        sleep(0.8)
         for attempt in range(1, 4):
             print(f"[Browser] 点击「免费注册」... ({attempt}/3)")
             self.click_button_by_text(["免费注册", "Sign up for free", "Sign up"], 12000)
@@ -506,14 +572,14 @@ class PatchrightBrowserService:
             except Exception:
                 if attempt == 3:
                     raise
-        sleep(1)
+        sleep(0.3)
         self.click_button_by_text(["使用电话号码继续", "继续使用手机登录", "手机登录", "Continue with phone number", "Continue with phone"], 10000)
         self.page.locator('input[name="phoneNumberInput"]').wait_for(timeout=15000)
 
     def complete_profile(self, user, on_sms_needed):
         last_url = ""
         for round_no in range(20):
-            sleep(3)
+            sleep(0.8)
             info = self.page_info()
             url = info["url"]
             text = info["text"]
@@ -536,7 +602,7 @@ class PatchrightBrowserService:
                     raise RuntimeError("当前手机号可能已存在账号，落到了登录密码页")
                 self.fill_password(user.password)
                 self.page.keyboard.press("Enter")
-                sleep(1)
+                sleep(0.2)
                 self.click_submit_button()
                 last_url = ""
                 continue
@@ -559,7 +625,7 @@ class PatchrightBrowserService:
         print("[Browser] 导航到 OAuth URL...")
         self.page.goto(auth_url, wait_until="domcontentloaded", timeout=60000)
         self.wait_for_cloudflare()
-        sleep(4)
+        sleep(0.8)
 
     def oauth_login_and_authorize(self, opts: dict):
         redirect = urlparse(opts["redirectUri"])
@@ -579,10 +645,10 @@ class PatchrightBrowserService:
         login_method = opts.get("loginMethod", "phone")
         email_bound = False
         last_url = ""
-        sleep(4)
+        sleep(0.8)
         try:
             for round_no in range(30):
-                sleep(3)
+                sleep(0.8)
                 if captured["url"]:
                     return captured["url"]
                 info = self.page_info()
@@ -605,18 +671,36 @@ class PatchrightBrowserService:
                     raise RuntimeError("停在 choose-an-account，但页面识别失败，已阻止误点普通继续按钮")
                 if url == last_url:
                     continue
-                if login_method == "email" and any("email" in b.lower() or "邮箱" in b or "电子邮件" in b for b in buttons):
-                    self.click_button_by_text(["电子邮件地址登录", "邮箱登录", "email"], 10000)
-                    last_url = url
-                    continue
+                if login_method == "email" and any("email" in b.lower() or "mail" in b.lower() or "邮箱" in b or "电子邮件" in b for b in buttons):
+                    try:
+                        self.click_button_by_text([
+                            "电子邮件地址登录",
+                            "邮箱登录",
+                            "使用电子邮件",
+                            "继续使用电子邮件",
+                            "邮件地址",
+                            "email",
+                            "e-mail",
+                            "mail",
+                            "continue with email",
+                            "continue with email address",
+                            "use email",
+                            "email address",
+                        ], 10000)
+                        last_url = url
+                        continue
+                    except Exception as exc:
+                        print(f"[OAuth] 邮箱登录按钮点击失败，继续尝试直接填写邮箱输入框: {exc}")
                 if login_method != "email" and any("phone" in b.lower() or "手机" in b or "电话号码" in b for b in buttons):
                     self.click_button_by_text(["使用电话号码继续", "继续使用手机登录", "手机登录", "Continue with phone number", "Continue with phone"], 10000)
                     last_url = url
                     continue
                 if login_method == "email" and any(i["type"] == "email" or i["name"] in {"email", "username", "identifier"} for i in info["inputs"]):
-                    target = self.page.locator('input[type="email"], input[name="email"], input[name="username"], input[name="identifier"], input[type="text"]').first
-                    target.click(click_count=3, timeout=10000)
-                    target.type(opts["email"], delay=35)
+                    self.fill_input_value(
+                        'input[type="email"], input[name="email"], input[name="username"], input[name="identifier"], input[type="text"]',
+                        opts["email"],
+                        "OAuth 邮箱",
+                    )
                     self.click_submit_button()
                     self.wait_for_cloudflare(30000)
                     last_url = url
@@ -631,7 +715,7 @@ class PatchrightBrowserService:
                 if "password" in url or any(i["type"] == "password" for i in info["inputs"]):
                     self.fill_password(opts["password"])
                     self.page.keyboard.press("Enter")
-                    sleep(1)
+                    sleep(0.2)
                     self.click_submit_button()
                     self.wait_for_cloudflare(30000)
                     last_url = url
@@ -641,9 +725,11 @@ class PatchrightBrowserService:
                     last_url = url
                     continue
                 if "add-email" in url or "add_email" in url:
-                    target = self.page.locator('input[type="email"], input[name="email"], input[type="text"]').first
-                    target.click(click_count=3, timeout=10000)
-                    target.type(opts["email"], delay=35)
+                    self.fill_input_value(
+                        'input[type="email"], input[name="email"], input[type="text"]',
+                        opts["email"],
+                        "绑定邮箱",
+                    )
                     self.click_submit_button()
                     self.wait_for_cloudflare(30000)
                     email_bound = True
@@ -691,7 +777,7 @@ class PatchrightBrowserService:
         print("[Phase1.5] 导航到 chatgpt.com...")
         self.page.goto("https://chatgpt.com", wait_until="domcontentloaded", timeout=60000)
         self.wait_for_cloudflare()
-        sleep(5)
+        sleep(0.8)
         body = self._body_text()
         if "登录" not in body and "Log in" not in body:
             print("[Phase1.5] 看起来已经处于登录状态")
@@ -704,7 +790,7 @@ class PatchrightBrowserService:
             self.select_country(country.get("dialCode", ""), country.get("name", ""), country.get("isoCode", ""))
             self.enter_phone(self.get_local_phone_number(opts["phone"], country))
             for _ in range(15):
-                sleep(3)
+                sleep(0.8)
                 info = self.page_info()
                 if "chatgpt.com" in info["url"] and "auth.openai.com" not in info["url"]:
                     return True
