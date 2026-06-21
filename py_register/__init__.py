@@ -1,0 +1,2 @@
+"""Patchright-based Python registrar."""
+
