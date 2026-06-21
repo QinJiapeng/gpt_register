@@ -266,22 +266,121 @@ class PatchrightBrowserService:
 
     def fill_about_you_and_submit(self, full_name: str, age: int, birth_date: str, tag: str):
         sleep(1.5)
-        try:
-            name = self.page.locator('input[name="name"], input[placeholder*="name"], input[placeholder*="姓名"]').first
-            if name.count():
-                name.click(click_count=3, timeout=3000)
-                name.type(full_name, delay=35)
-                print(f"{tag} 已填写全名: {full_name}")
-        except Exception:
-            pass
-        try:
-            age_box = self.page.locator('input[name="age"]').first
-            if age_box.count():
-                age_box.click(click_count=3, timeout=3000)
-                age_box.type(str(age), delay=50)
-                print(f"{tag} 已填写年龄: {age}")
-        except Exception:
-            pass
+        filled = self.page.evaluate(
+            """({fullName, age, birthDate}) => {
+                const [year, month, day] = String(birthDate || '1990-01-01').split('-');
+                const results = [];
+                const isVisible = (el) => {
+                    if (!el) return false;
+                    const rect = el.getBoundingClientRect();
+                    const style = window.getComputedStyle(el);
+                    return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+                };
+                const labelText = (el) => {
+                    const parts = [
+                        el.name,
+                        el.id,
+                        el.placeholder,
+                        el.getAttribute('aria-label'),
+                        el.getAttribute('autocomplete'),
+                    ];
+                    if (el.id) {
+                        const label = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+                        if (label) parts.push(label.innerText || label.textContent || '');
+                    }
+                    const parentText = el.closest('label, div, section, fieldset')?.innerText || '';
+                    parts.push(parentText.slice(0, 180));
+                    return parts.filter(Boolean).join(' ').toLowerCase();
+                };
+                const setValue = (el, value) => {
+                    el.scrollIntoView({block: 'center', inline: 'center'});
+                    el.focus();
+                    const proto = el instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
+                    const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+                    if (setter) setter.call(el, String(value)); else el.value = String(value);
+                    el.dispatchEvent(new Event('input', {bubbles: true}));
+                    el.dispatchEvent(new Event('change', {bubbles: true}));
+                    el.dispatchEvent(new KeyboardEvent('keyup', {bubbles: true}));
+                };
+                const inputs = Array.from(document.querySelectorAll('input:not([type="hidden"])')).filter(isVisible);
+
+                const nameInput = inputs.find((el) => {
+                    const text = labelText(el);
+                    return /(^|\\s)(name|full-name|fullname)(\\s|$)/i.test(text)
+                        || text.includes('full name')
+                        || text.includes('姓名')
+                        || text.includes('名字')
+                        || String(el.name || '').toLowerCase() === 'name';
+                });
+                if (nameInput && fullName) {
+                    setValue(nameInput, fullName);
+                    results.push(`name=${fullName}`);
+                }
+
+                const ageInput = inputs.find((el) => {
+                    const text = labelText(el);
+                    if (String(el.name || '').toLowerCase() === 'age') return true;
+                    if (text.includes('age') || text.includes('年龄') || text.includes('old')) return true;
+                    return el.type === 'number' && !/(year|month|day|birth|年|月|日|phone|code)/i.test(text);
+                });
+                if (ageInput && age) {
+                    setValue(ageInput, age);
+                    results.push(`age=${age}`);
+                }
+
+                const dateInput = !ageInput && inputs.find((el) => {
+                    const text = labelText(el);
+                    return el.type === 'date' || text.includes('birth date') || text.includes('birthday') || text.includes('出生日期') || text.includes('生日');
+                });
+                if (dateInput && birthDate) {
+                    setValue(dateInput, birthDate);
+                    results.push(`birthDate=${birthDate}`);
+                }
+
+                if (!ageInput && !dateInput) {
+                    const findPart = (patterns) => inputs.find((el) => {
+                        const text = labelText(el);
+                        return patterns.some((pattern) => pattern.test(text));
+                    });
+                    const yearInput = findPart([/birth.{0,30}year/i, /year.{0,30}birth/i, /(^|\\s)year(\\s|$)/i, /出生.*年/, /年/]);
+                    const monthInput = findPart([/birth.{0,30}month/i, /month.{0,30}birth/i, /(^|\\s)month(\\s|$)/i, /出生.*月/, /月/]);
+                    const dayInput = findPart([/birth.{0,30}day/i, /day.{0,30}birth/i, /(^|\\s)day(\\s|$)/i, /出生.*日/, /日/]);
+                    if (yearInput && year) {
+                        setValue(yearInput, year);
+                        results.push(`birthYear=${year}`);
+                    }
+                    if (monthInput && month) {
+                        setValue(monthInput, String(Number(month)));
+                        results.push(`birthMonth=${String(Number(month))}`);
+                    }
+                    if (dayInput && day) {
+                        setValue(dayInput, String(Number(day)));
+                        results.push(`birthDay=${String(Number(day))}`);
+                    }
+                }
+
+                const selects = Array.from(document.querySelectorAll('select')).filter(isVisible);
+                for (const select of selects) {
+                    const text = labelText(select);
+                    let wanted = '';
+                    if (/year|年/.test(text)) wanted = year;
+                    if (/month|月/.test(text)) wanted = String(Number(month));
+                    if (/day|日/.test(text)) wanted = String(Number(day));
+                    if (!wanted) continue;
+                    const option = Array.from(select.options).find((opt) => opt.value === wanted || opt.text.trim() === wanted || opt.text.includes(wanted));
+                    if (option) {
+                        setValue(select, option.value);
+                        results.push(`${text.includes('month') || text.includes('月') ? 'birthMonth' : text.includes('day') || text.includes('日') ? 'birthDay' : 'birthYear'}=${wanted}`);
+                    }
+                }
+                return results;
+            }""",
+            {"fullName": full_name, "age": str(age), "birthDate": birth_date},
+        )
+        if filled:
+            print(f"{tag} about-you 已填写: {', '.join(filled)}")
+        else:
+            print(f"{tag} 未识别到 about-you 输入框，准备直接尝试提交")
         self.page.evaluate(
             """() => {
                 for (const input of document.querySelectorAll('input[type="checkbox"]')) {
@@ -292,6 +391,102 @@ class PatchrightBrowserService:
         )
         self.click_submit_button()
         self.wait_for_cloudflare(60000)
+        sleep(2)
+
+    @staticmethod
+    def is_choose_account_page(info: dict) -> bool:
+        url = str(info.get("url") or "")
+        text = str(info.get("text") or "")
+        return (
+            "/choose-an-account" in url
+            or "选择帐户" in text
+            or "选择账户" in text
+            or "choose an account" in text.lower()
+        )
+
+    def choose_existing_account(self, phone: str = "", full_name: str = "", tag: str = "[OAuth]"):
+        phone_digits = re.sub(r"\D+", "", str(phone or ""))
+        local_digits = phone_digits[-9:] if len(phone_digits) > 6 else phone_digits
+        result = self.page.evaluate(
+            """({phoneDigits, localDigits, fullName}) => {
+                const visible = (el) => {
+                    if (!el) return false;
+                    const rect = el.getBoundingClientRect();
+                    const style = window.getComputedStyle(el);
+                    return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+                };
+                const digitsOnly = (value) => String(value || '').replace(/\\D+/g, '');
+                const normalizedName = String(fullName || '').trim().toLowerCase();
+                const skipTexts = [
+                    'use another account',
+                    'add account',
+                    '使用其他',
+                    '其他帐号',
+                    '其他账号',
+                    '继续使用手机',
+                    'continue with phone',
+                    'continue with email',
+                    'google',
+                    'apple',
+                    'microsoft'
+                ];
+                const nodes = Array.from(document.querySelectorAll('button, [role="button"], a, [tabindex], [role="option"]'));
+                let best = null;
+                for (const node of nodes) {
+                    if (!visible(node)) continue;
+                    const text = (node.innerText || node.textContent || '').trim();
+                    if (!text || text.length < 2) continue;
+                    const lower = text.toLowerCase();
+                    if (skipTexts.some(item => lower.includes(item.toLowerCase()))) continue;
+                    const digits = digitsOnly(text);
+                    let score = 0;
+                    if (phoneDigits && digits.includes(phoneDigits)) score += 120;
+                    if (localDigits && digits.includes(localDigits)) score += 90;
+                    if (normalizedName && lower.includes(normalizedName)) score += 70;
+                    if (/@/.test(text)) score += 25;
+                    if (digits.length >= 4) score += 20;
+                    if (lower.includes('choose') || lower.includes('选择')) score -= 20;
+                    if (score <= 0 && !/@/.test(text) && digits.length < 4) continue;
+                    const rect = node.getBoundingClientRect();
+                    const item = {
+                        score,
+                        text: text.slice(0, 200),
+                        x: rect.left + rect.width / 2,
+                        y: rect.top + rect.height / 2,
+                    };
+                    if (!best || item.score > best.score) best = item;
+                }
+                if (!best) {
+                    const fallback = nodes.find((node) => {
+                        if (!visible(node)) return false;
+                        const text = (node.innerText || node.textContent || '').trim();
+                        const lower = text.toLowerCase();
+                        if (!text || text.length < 2) return false;
+                        if (skipTexts.some(item => lower.includes(item.toLowerCase()))) return false;
+                        if (lower.includes('choose an account') || lower.includes('选择帐户') || lower.includes('选择账户')) return false;
+                        return true;
+                    });
+                    if (fallback) {
+                        const rect = fallback.getBoundingClientRect();
+                        best = {
+                            score: 1,
+                            text: (fallback.innerText || fallback.textContent || '').trim().slice(0, 200),
+                            x: rect.left + rect.width / 2,
+                            y: rect.top + rect.height / 2,
+                        };
+                    }
+                }
+                return best;
+            }""",
+            {"phoneDigits": phone_digits, "localDigits": local_digits, "fullName": full_name or ""},
+        )
+        if not result:
+            self.screenshot("choose-account-not-found.png")
+            raise RuntimeError("choose-an-account 页面未找到可点击账号卡片")
+        print(f"{tag} 选择已有账号: {result.get('text')}")
+        self.page.mouse.click(result["x"], result["y"])
+        sleep(3)
+        self.wait_for_cloudflare(30000)
         sleep(2)
 
     def navigate_to_signup(self):
@@ -326,6 +521,10 @@ class PatchrightBrowserService:
             if "chatgpt.com" in url and "auth.openai.com" not in url and "登录或注册" not in text:
                 print("[Phase1] 注册完成，已到达 ChatGPT")
                 return True
+            if self.is_choose_account_page(info):
+                self.choose_existing_account(full_name=user.full_name, tag="[Phase1]")
+                last_url = ""
+                continue
             if url == last_url and "password" not in url:
                 continue
             if "about-you" in url or "about_you" in url or "你的年龄是多少" in text:
@@ -395,6 +594,15 @@ class PatchrightBrowserService:
                     return captured["url"]
                 if "chrome-error" in url and captured["url"]:
                     return captured["url"]
+                if self.is_choose_account_page(info):
+                    try:
+                        self.choose_existing_account(opts.get("phone", ""), opts.get("fullName", ""), "[OAuth]")
+                    except Exception as exc:
+                        raise RuntimeError(f"停在选择账号页，但自动选择失败: {exc}") from exc
+                    last_url = ""
+                    continue
+                if "/choose-an-account" in url:
+                    raise RuntimeError("停在 choose-an-account，但页面识别失败，已阻止误点普通继续按钮")
                 if url == last_url:
                     continue
                 if login_method == "email" and any("email" in b.lower() or "邮箱" in b or "电子邮件" in b for b in buttons):
@@ -500,6 +708,9 @@ class PatchrightBrowserService:
                 info = self.page_info()
                 if "chatgpt.com" in info["url"] and "auth.openai.com" not in info["url"]:
                     return True
+                if self.is_choose_account_page(info):
+                    self.choose_existing_account(opts.get("phone", ""), opts.get("fullName", ""), "[Phase1.5]")
+                    continue
                 if any(i["type"] == "password" for i in info["inputs"]):
                     self.fill_password(opts["password"])
                     self.click_submit_button()

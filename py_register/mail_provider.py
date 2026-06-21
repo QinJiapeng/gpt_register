@@ -18,9 +18,33 @@ def _random_password(length: int = 14) -> str:
     return "".join(random.choice(chars) for _ in range(length)) + "A1!"
 
 
-def mail_to_text(mail: dict) -> str:
-    parts = [mail.get(key) for key in ("raw", "text", "content", "subject", "message")]
+def mail_to_text(mail) -> str:
+    if isinstance(mail, str):
+        return mail
+    if not isinstance(mail, dict):
+        return str(mail or "")
+    parts = [mail.get(key) for key in ("raw", "text", "content", "html", "body", "subject", "message")]
     return "\n\n".join(str(x) for x in parts if isinstance(x, str) and x.strip())
+
+
+def extract_mail_rows(payload) -> list:
+    if isinstance(payload, list):
+        return payload
+    if not isinstance(payload, dict):
+        return [payload] if payload else []
+    for key in ("mails", "results", "list", "rows", "items"):
+        value = payload.get(key)
+        if isinstance(value, list):
+            return value
+    data = payload.get("data")
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        for key in ("mails", "results", "list", "rows", "items"):
+            value = data.get(key)
+            if isinstance(value, list):
+                return value
+    return []
 
 
 def extract_verification_code(raw: str) -> str | None:
@@ -245,7 +269,7 @@ class MailProvider:
             )
             response.raise_for_status()
             data = response.json()
-            return data if isinstance(data, list) else data.get("mails") or data.get("results") or data.get("data") or []
+            return extract_mail_rows(data)
         if self.provider == "cloud-mail":
             if not self.jwt:
                 raise RuntimeError("[cloud-mail] 当前邮箱会话不存在")
@@ -257,18 +281,21 @@ class MailProvider:
             )
             response.raise_for_status()
             data = self._unwrap_cloud(response.json(), "email/list")
-            return data.get("list") if isinstance(data, dict) else []
+            return extract_mail_rows(data)
         if self.provider == "outlook":
             raise NotImplementedError("Python 版已支持 Outlook 号池 claim，但暂未实现 IMAP XOAUTH2 收信；请先用 cloudflare-worker/cloud-mail，或继续使用 Node 版 Outlook 收信。")
         response = requests.get(f"{self.base_url}/api/mails", params={"limit": limit, "offset": offset}, headers={"Authorization": self.jwt}, timeout=15)
         response.raise_for_status()
-        return response.json().get("results", [])
+        return extract_mail_rows(response.json())
 
     def poll_code(self, max_attempts=30, interval=5) -> str:
         for attempt in range(1, max_attempts + 1):
             print(f"[Mail] polling code... ({attempt}/{max_attempts})")
             for mail in self.get_mails(5, 0):
-                code = extract_verification_code(mail_to_text(mail))
+                raw = mail_to_text(mail)
+                if not raw:
+                    continue
+                code = extract_verification_code(raw)
                 if code:
                     print(f"[Mail] latest code: {code}")
                     return code

@@ -522,5 +522,21 @@
     "smsOperator": "",
     "createdAt": "2026-06-21T02:31:10.565Z",
     "status": "email_bound"
+  },
+  {
+    "email": "hxl8msu01p@550717.xyz",
+    "phone": "+573175641194",
+    "password": "zEa5Vk4dJv@5JNNUA1!",
+    "name": "Brent Miranda",
+    "birthDate": "1997-09-03",
+    "phoneCountryCode": "CO",
+    "phoneCountryDialCode": "57",
+    "phoneCountryName": "哥伦比亚",
+    "heroSmsCountry": 33,
+    "smsBowerCountry": null,
+    "smsProvider": "herosms",
+    "smsCountry": 33,
+    "createdAt": "2026-06-21T13:27:20.503Z",
+    "status": "email_bound"
   }
 ]
