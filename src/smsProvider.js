@@ -422,9 +422,10 @@ class SMSProvider {
      * 获取手机号码（V2 接口，返回 JSON）
      * @param {string} service - 服务代码（OpenAI = 'dr'）
      * @param {number} country - 国家 ID（哥伦比亚 = 33）
+     * @param {number} maxRetries - 无可用号码或接口临时失败时的最大取号次数
      * @returns {Promise<{activationId: number, phoneNumber: string}>}
      */
-    async getNumber(service = 'dr', country = 33, maxRetries = 5) {
+    async getNumber(service = 'dr', country = 33, maxRetries = 10) {
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
             let data;
             try {

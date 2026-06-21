@@ -937,8 +937,9 @@ function saveUsernameFile({ email, phone, password, name, birthDate, status, pho
 async function getNumberWithDefaultOperator(smsProvider, phoneCountry) {
     const service = config.heroSmsService;
     const countryId = Number(phoneCountry?.heroSmsCountry) || config.heroSmsCountry;
-    console.log('[SMS] 尝试获取号码: 任何运营商（不传 operator 参数）');
-    await smsProvider.getNumber(service, countryId);
+    const maxRetries = 10;
+    console.log(`[SMS] 尝试获取号码: 任何运营商（不传 operator 参数），最多重试 ${maxRetries} 次`);
+    await smsProvider.getNumber(service, countryId, maxRetries);
 }
 
 /**
