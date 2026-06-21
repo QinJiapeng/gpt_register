@@ -1,5 +1,5 @@
 {
-  "smsProvider": "smsbower",
+  "smsProvider": "herosms",
   "smsBowerApiKey": "LuQEgpE9XYTnM8UzXb6LNdjPsRrRVMNs",
   "smsBowerService": "dr",
   "smsBowerCountry": 33,
