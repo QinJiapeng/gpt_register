@@ -494,6 +494,22 @@
     "smsCountry": 33,
     "smsOperator": "",
     "createdAt": "2026-06-21T02:25:35.155Z",
-    "status": "registered"
+    "status": "oauth_done"
+  },
+  {
+    "phone": "+573022413600",
+    "password": "qVLQUItslG0OAYLbA1!",
+    "name": "William Kotz",
+    "birthDate": "1996-11-15",
+    "phoneCountryCode": "CO",
+    "phoneCountryDialCode": "57",
+    "phoneCountryName": "哥伦比亚",
+    "heroSmsCountry": 33,
+    "smsBowerCountry": 33,
+    "smsProvider": "smsbower",
+    "smsCountry": 33,
+    "smsOperator": "",
+    "createdAt": "2026-06-21T02:31:10.565Z",
+    "status": "oauth_done"
   }
 ]

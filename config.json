@@ -1,8 +1,8 @@
 {
-  "smsProvider": "herosms",
+  "smsProvider": "smsbower",
   "smsBowerApiKey": "LuQEgpE9XYTnM8UzXb6LNdjPsRrRVMNs",
   "smsBowerService": "dr",
-  "smsBowerCountry": 52,
+  "smsBowerCountry": 33,
   "smsBowerPromptCountrySelection": false,
   "smsBowerMaxPrice": 0.05,
   "smsBowerBaseUrl": "https://smsbower.page/stubs/handler_api.php",

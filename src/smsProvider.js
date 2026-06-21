@@ -435,7 +435,7 @@ class SMSProvider {
      * @param {string} service - 服务代码（OpenAI = 'dr'）
      * @param {number} country - 国家 ID（哥伦比亚 = 33）
      * @param {number} maxRetries - 无可用号码或接口临时失败时的最大取号次数
-     * @returns {Promise<{activationId: number, phoneNumber: string}>}
+     * @returns {Promise<{activationId: number, phoneNumber: string, activationCost?: number|string}>}
      */
     async getNumber(service = 'dr', country = 33, maxRetries = 10) {
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -498,8 +498,9 @@ class SMSProvider {
                 throw new Error(`获取号码返回格式异常: ${this.summarizePayload(data)}`);
             }
 
-            console.log(`[SMS] 获取号码: ${this.phoneNumber} (activation: ${this.activationId}, 费用: $${data.activationCost ?? data.cost ?? '-'})`);
-            return { activationId: this.activationId, phoneNumber: this.phoneNumber };
+            const activationCost = data.activationCost ?? data.cost ?? data.price ?? '';
+            console.log(`[SMS] 获取号码: ${this.phoneNumber} (activation: ${this.activationId}, 费用: $${activationCost || '-'})`);
+            return { activationId: this.activationId, phoneNumber: this.phoneNumber, activationCost };
         }
     }
 
@@ -633,6 +634,7 @@ class SMSBowerProvider extends SMSProvider {
             baseUrl: options.baseUrl || 'https://smsbower.page/stubs/handler_api.php',
             statusAction: 'getStatus',
         });
+        this.maxPrice = options.maxPrice;
     }
 
     getNumberRequestParams(service, country) {
@@ -644,6 +646,11 @@ class SMSBowerProvider extends SMSProvider {
             SMSBOWER_EXCEPT_PROVIDER_IDS: 'exceptProviderIds',
             SMSBOWER_PHONE_EXCEPTION: 'phoneException',
         };
+
+        const configuredMaxPrice = Number(this.maxPrice);
+        if (Number.isFinite(configuredMaxPrice) && configuredMaxPrice > 0) {
+            params.maxPrice = String(configuredMaxPrice);
+        }
 
         for (const [envName, paramName] of Object.entries(optionalEnvParams)) {
             const value = String(process.env[envName] || '').trim();

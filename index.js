@@ -71,7 +71,10 @@ const SMS_PLATFORM = buildSmsPlatformConfig();
 
 function createSmsProvider() {
     if (SMS_PLATFORM.provider === 'smsbower') {
-        return new SMSBowerProvider(SMS_PLATFORM.apiKey, { baseUrl: SMS_PLATFORM.baseUrl });
+        return new SMSBowerProvider(SMS_PLATFORM.apiKey, {
+            baseUrl: SMS_PLATFORM.baseUrl,
+            maxPrice: getSmsMaxPrice(),
+        });
     }
     return new SMSProvider(SMS_PLATFORM.apiKey);
 }
@@ -1037,7 +1040,18 @@ async function getNumberWithDefaultOperator(smsProvider, phoneCountry) {
     const countryId = getCountryProviderId(phoneCountry) || SMS_PLATFORM.country;
     const maxRetries = 10;
     console.log(`[SMS] 尝试获取号码: 任何运营商（不传 operator 参数），最多重试 ${maxRetries} 次`);
-    await smsProvider.getNumber(service, countryId, maxRetries);
+    const number = await smsProvider.getNumber(service, countryId, maxRetries);
+    const maxPrice = getSmsMaxPrice();
+    const actualCost = Number(number?.activationCost ?? number?.cost ?? number?.price);
+    if (maxPrice !== null && Number.isFinite(actualCost) && actualCost > maxPrice) {
+        console.error(`[SMS] 实际取号费用 $${actualCost.toFixed(3)} 高于上限 $${maxPrice.toFixed(3)}，取消当前激活`);
+        await smsProvider.cancel();
+        const priceError = new Error(`${SMS_PLATFORM.label} 实际取号费用 $${actualCost.toFixed(3)} 高于上限 $${maxPrice.toFixed(3)}`);
+        priceError.code = 'SMS_PRICE_EXCEEDED';
+        priceError.noRetryDelay = true;
+        throw priceError;
+    }
+    return number;
 }
 
 /**
